@@ -1,6 +1,5 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Keep Mongoose external; bundle Solana libs (Turbopack-friendly)
   serverExternalPackages: ["mongoose"],
   transpilePackages: [
     "@solana/spl-token",
@@ -9,54 +8,40 @@ const nextConfig = {
     "@mrgnlabs/mrgn-common",
   ],
 
-  // Trim the oversized serverless function (route handler)
-  // NOTE: keys are globs relative to project root; no leading slash.
+  // ✅ The key is "*" so it applies even if Next changes the internal route id
   outputFileTracingExcludes: {
-    // App Router API route
-    "app/api/email-claims/claim/route": [
+    "*": [
+      // Enormous native/compiler bits we never need inside serverless zips
       "node_modules/@next/swc-*/**",
+      "node_modules/next/dist/compiled/@next/swc/**",
+      "node_modules/next/dist/compiled/edge-runtime/**",
       "node_modules/lightningcss-*/**",
       "node_modules/@img/**",
       "node_modules/sharp/**",
       "node_modules/@napi-rs/**",
+
+      // Tooling that's irrelevant at runtime
       "node_modules/typescript/**",
       "node_modules/eslint/**",
       "node_modules/@typescript-eslint/**",
       "node_modules/axe-core/**",
+
+      // UI icon/font packs that sometimes get pulled into server traces
       "node_modules/@heroicons/**",
       "node_modules/react-icons/**",
       "node_modules/lucide-react/**",
-      "node_modules/@reown/**",
       "node_modules/@phosphor-icons/**",
-      "node_modules/caniuse-lite/**",
-    ],
-    // Safety if you later add a pages/api fallback
-    "api/email-claims/claim": [
-      "node_modules/@next/swc-*/**",
-      "node_modules/lightningcss-*/**",
-      "node_modules/@img/**",
-      "node_modules/sharp/**",
-      "node_modules/@napi-rs/**",
-      "node_modules/typescript/**",
-      "node_modules/eslint/**",
-      "node_modules/@typescript-eslint/**",
-      "node_modules/axe-core/**",
-      "node_modules/@heroicons/**",
-      "node_modules/react-icons/**",
-      "node_modules/lucide-react/**",
-      "node_modules/@reown/**",
-      "node_modules/@phosphor-icons/**",
+
+      // Bulky data lists
       "node_modules/caniuse-lite/**",
     ],
   },
 
-  // Small server-side savings
   experimental: {
-    serverMinification: true,
+    serverMinification: true, // small server-side wins
   },
 
-  // Avoid pulling sharp/libvips into serverless bundles
-  images: { disableStaticImages: true },
+  images: { disableStaticImages: true }, // prevents sharp/libvips from being traced
 };
 
 export default nextConfig;
