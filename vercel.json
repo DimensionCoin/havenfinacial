@@ -1,6 +1,6 @@
 {
   "functions": {
-    "api/**": {
+    "app/**/route.ts": {
       "excludeFiles": "node_modules/@next/swc-*/**"
     }
   }
