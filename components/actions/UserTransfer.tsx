@@ -223,6 +223,12 @@ export default function UserTransfer({
           toOwnerBase58: resolvedPk.toBase58(),
           amountUi,
           accessToken,
+          // 👇 NEW: ask backend to notify the recipient user
+          notify: {
+            toOwnerBase58: resolvedPk.toBase58(),
+            amountUi, // lets server template a nice message
+            // message: note ? `“${note}”` : undefined, // optional override; omit to use server fallback
+          },
           // backendUrl: "/api/transfer" (default)
         });
         if (sig) onSuccess?.(sig);

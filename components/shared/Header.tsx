@@ -5,9 +5,9 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import Image from "next/image";
-import { BellIcon } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
+import NotificationBell from "./NotificationBell";
 
 const NAV = [
   { name: "Dashboard", href: "/dashboard" },
@@ -144,11 +144,7 @@ export default function Header() {
           <div className="flex items-center gap-3">
             {isAuthed ? (
               <>
-                <Link href={"/notifications"}>
-                  <button className="flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-foreground hover:bg-white/20 transition-colors">
-                    <BellIcon />
-                  </button>
-                </Link>
+                <NotificationBell/>
 
                 <div className="relative">
                   <button

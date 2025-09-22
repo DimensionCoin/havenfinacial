@@ -17,6 +17,15 @@ import {
 } from "@solana/spl-token";
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
 
+export type TransferNotify = {
+  /** recipient owner (base58) so the server can resolve the user */
+  toOwnerBase58: string;
+  /** optional custom copy; server has a nice default */
+  message?: string;
+  /** optional for templating a friendly “You received $X” server message */
+  amountUi?: number;
+};
+
 export type TransferInput = {
   /** sender authority; pass user.depositWallet.address */
   fromOwnerBase58: string;
@@ -28,6 +37,8 @@ export type TransferInput = {
   accessToken?: string | null;
   /** optional override; default /api/transfer */
   backendUrl?: string;
+  /** ask server to create a notification for the recipient */
+  notify?: TransferNotify;
 };
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
@@ -64,6 +75,7 @@ export function useSponsoredUsdcTransfer() {
       amountUi,
       accessToken,
       backendUrl,
+      notify, // <-- include notify in params
     }: TransferInput) => {
       setLoading(true);
       setError(null);
@@ -179,9 +191,10 @@ export function useSponsoredUsdcTransfer() {
         const signedByUser = await userWallet.signTransaction(tx);
 
         // Ship to backend for Haven fee-payer signature + broadcast
-        const body = JSON.stringify({
+        const bodyObj: any = {
           transaction: Buffer.from(signedByUser.serialize()).toString("base64"),
-        });
+        };
+        if (notify) bodyObj.notify = notify; // <-- forward notify (includes amountUi if provided)
 
         const headers: HeadersInit = {
           "Content-Type": "application/json",
@@ -193,7 +206,7 @@ export function useSponsoredUsdcTransfer() {
           credentials: "include",
           cache: "no-store",
           headers,
-          body,
+          body: JSON.stringify(bodyObj),
         });
 
         const j = await res.json().catch(() => ({}));
