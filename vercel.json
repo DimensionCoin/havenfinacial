@@ -1,10 +1,7 @@
 {
   "functions": {
     "api/**": {
-      "excludeFiles": "{node_modules/@next/swc-*/**,node_modules/typescript/**,node_modules/react-icons/**,node_modules/@phosphor-icons/**,node_modules/@heroicons/**,node_modules/axe-core/**,node_modules/jiti/**,node_modules/caniuse-lite/**,node_modules/@tailwindcss/**,node_modules/libphonenumber-js/**,node_modules/@img/**,node_modules/lightningcss-*/**}"
-    },
-    "api/email-claims/claim": {
-      "excludeFiles": "{node_modules/@next/swc-*/**,node_modules/typescript/**,node_modules/react-icons/**,node_modules/@phosphor-icons/**,node_modules/@heroicons/**,node_modules/axe-core/**,node_modules/jiti/**,node_modules/caniuse-lite/**,node_modules/@tailwindcss/**,node_modules/libphonenumber-js/**,node_modules/@img/**,node_modules/lightningcss-*/**}"
+      "excludeFiles": "node_modules/@next/swc-*/**"
     }
   }
 }
