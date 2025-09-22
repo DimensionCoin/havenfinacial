@@ -2,10 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
 
-  // (Optional) keep Turbopack on
-  experimental: {
-    turbopack: true,
-  },
+  // (Removed invalid experimental.turbopack flag; Turbopack is enabled via CLI)
 
   // Keep native deps external so they don’t get bundled
   serverExternalPackages: ["mongoose", "bson"],
