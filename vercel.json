@@ -1,0 +1,10 @@
+{
+  "functions": {
+    "api/**": {
+      "excludeFiles": "node_modules/@next/swc-*/**"
+    },
+    "app/**/route.{js,cjs,mjs}": {
+      "excludeFiles": "node_modules/@next/swc-*/**"
+    }
+  }
+}
