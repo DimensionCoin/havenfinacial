@@ -1,7 +1,9 @@
 {
   "functions": {
-    "app/**/route.ts": {
-      "excludeFiles": "node_modules/@next/swc-*/**"
-    }
+    "app/**/route.ts": { "excludeFiles": "node_modules/@next/swc-*/**" },
+    "app/**/route.tsx": { "excludeFiles": "node_modules/@next/swc-*/**" },
+    "app/**/route.js": { "excludeFiles": "node_modules/@next/swc-*/**" },
+    "app/**/route.mjs": { "excludeFiles": "node_modules/@next/swc-*/**" },
+    "app/**/route.cjs": { "excludeFiles": "node_modules/@next/swc-*/**" }
   }
 }
