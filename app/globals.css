@@ -283,3 +283,13 @@
 html[data-standalone="true"] .pwa-toaster {
   top: calc(env(safe-area-inset-top, 0px) + 28px) !important;
 }
+
+/* No extra top padding by default */
+.pwa-top-offset {
+  padding-top: 0;
+}
+
+/* In standalone (installed PWA), add safe-area plus a bit of breathing room */
+html[data-standalone="true"] .pwa-top-offset {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 20px);
+}
