@@ -273,7 +273,20 @@ export default function NotificationBell({
         <div
           role="menu"
           aria-label="Notifications"
-          className="absolute right-0 mt-2 w-[360px] max-h-[70vh] overflow-auto rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl"
+          // Mobile: fixed panel that fits viewport; sm+: revert to anchored dropdown
+          className={[
+            // mobile-first (xs): fixed, full-width with 8px margins, placed below header
+            "fixed left-2 right-2 top-[56px]", // ~ 56px from top; tweak if your header is taller
+            "max-h-[calc(100vh-96px)]", // leaves room below so it never clips
+            "w-auto",
+
+            // shared styling
+            "z-[100] overflow-auto rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl",
+
+            // sm and up: behave like the old dropdown
+            "sm:absolute sm:right-0 sm:top-auto sm:mt-2",
+            "sm:w-[360px] sm:max-h-[70vh]",
+          ].join(" ")}
         >
           <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-2 border-b border-white/10 bg-zinc-900/95">
             <span className="text-xs font-semibold text-white/80">
