@@ -99,33 +99,72 @@ export default function AddToHomeButton({
         </button>
 
         {showIOSHelp && (
-          <div className="fixed inset-0 z-[9999] grid place-items-center">
+          <div className="fixed inset-0 z-[99999] grid place-items-center p-4">
             <div
-              className="absolute inset-0 bg-black/60"
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
               onClick={() => {
                 setShowIOSHelp(false);
                 onDone?.();
               }}
             />
-            <div className="relative bg-zinc-900 border border-white/10 rounded-2xl p-5 w-[90%] max-w-sm text-white">
-              <h3 className="text-lg font-semibold">Add to Home Screen</h3>
-              <p className="text-sm text-zinc-300 mt-2">
-                1) Tap the <span className="font-semibold">Share</span> icon in
-                Safari.
-                <br />
-                2) Choose{" "}
-                <span className="font-semibold">Add to Home Screen</span>.
-                <br />
-                3) Open from your home screen for a full-screen experience.
-              </p>
+            <div className="relative bg-zinc-900/95 backdrop-blur-xl border border-white/20 rounded-3xl p-8 w-full max-w-md text-white shadow-2xl">
+              <div className="text-center mb-6">
+                <div className="w-16 h-16 bg-[rgb(182,255,62)] rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <svg
+                    className="w-8 h-8 text-black"
+                    fill="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+                  </svg>
+                </div>
+                <h3 className="text-2xl font-bold mb-2">Install Haven Bank</h3>
+                <p className="text-zinc-400 text-sm">
+                  Get the full app experience on your device
+                </p>
+              </div>
+
+              <div className="space-y-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                    1
+                  </div>
+                  <p className="text-sm text-zinc-300">
+                    Tap the{" "}
+                    <span className="font-semibold text-white">Share</span> icon
+                    at the bottom of Safari
+                  </p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                    2
+                  </div>
+                  <p className="text-sm text-zinc-300">
+                    Scroll down and select{" "}
+                    <span className="font-semibold text-white">
+                      "Add to Home Screen"
+                    </span>
+                  </p>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                    3
+                  </div>
+                  <p className="text-sm text-zinc-300">
+                    Tap <span className="font-semibold text-white">"Add"</span>{" "}
+                    to install Haven Bank on your home screen
+                  </p>
+                </div>
+              </div>
+
               <button
-                className="mt-4 rounded-xl bg-[rgb(182,255,62)] text-black px-4 py-2 font-semibold"
+                className="w-full rounded-2xl bg-[rgb(182,255,62)] text-black px-6 py-4 font-bold text-lg hover:bg-[rgb(182,255,62)]/90 transition-colors"
                 onClick={() => {
                   setShowIOSHelp(false);
                   onDone?.();
                 }}
               >
-                Got it
+                Got it!
               </button>
             </div>
           </div>
@@ -145,33 +184,72 @@ export default function AddToHomeButton({
       </button>
 
       {showIOSHelp && (
-        <div className="fixed inset-0 z-[9999] grid place-items-center">
+        <div className="fixed inset-0 z-[99999] grid place-items-center p-4">
           <div
-            className="absolute inset-0 bg-black/60"
+            className="absolute inset-0 bg-black/80 backdrop-blur-sm"
             onClick={() => {
               setShowIOSHelp(false);
               onDone?.();
             }}
           />
-          <div className="relative bg-zinc-900 border border-white/10 rounded-2xl p-5 w-[90%] max-w-sm text-white">
-            <h3 className="text-lg font-semibold">Add to Home Screen</h3>
-            <p className="text-sm text-zinc-300 mt-2">
-              1) Tap the <span className="font-semibold">Share</span> icon in
-              Safari.
-              <br />
-              2) Choose{" "}
-              <span className="font-semibold">Add to Home Screen</span>.
-              <br />
-              3) Open from your home screen for a full-screen experience.
-            </p>
+          <div className="relative bg-zinc-900/95 backdrop-blur-xl border border-white/20 rounded-3xl p-8 w-full max-w-md text-white shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-[rgb(182,255,62)] rounded-2xl flex items-center justify-center mx-auto mb-4">
+                <svg
+                  className="w-8 h-8 text-black"
+                  fill="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold mb-2">Install Haven Bank</h3>
+              <p className="text-zinc-400 text-sm">
+                Get the full app experience on your device
+              </p>
+            </div>
+
+            <div className="space-y-4 mb-6">
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                  1
+                </div>
+                <p className="text-sm text-zinc-300">
+                  Tap the{" "}
+                  <span className="font-semibold text-white">Share</span> icon
+                  at the bottom of Safari
+                </p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                  2
+                </div>
+                <p className="text-sm text-zinc-300">
+                  Scroll down and select{" "}
+                  <span className="font-semibold text-white">
+                    "Add to Home Screen"
+                  </span>
+                </p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-6 h-6 bg-[rgb(182,255,62)] rounded-full flex items-center justify-center text-black font-bold text-sm flex-shrink-0 mt-0.5">
+                  3
+                </div>
+                <p className="text-sm text-zinc-300">
+                  Tap <span className="font-semibold text-white">"Add"</span> to
+                  install Haven Bank on your home screen
+                </p>
+              </div>
+            </div>
+
             <button
-              className="mt-4 rounded-xl bg-[rgb(182,255,62)] text-black px-4 py-2 font-semibold"
+              className="w-full rounded-2xl bg-[rgb(182,255,62)] text-black px-6 py-4 font-bold text-lg hover:bg-[rgb(182,255,62)]/90 transition-colors"
               onClick={() => {
                 setShowIOSHelp(false);
                 onDone?.();
               }}
             >
-              Got it
+              Got it!
             </button>
           </div>
         </div>
