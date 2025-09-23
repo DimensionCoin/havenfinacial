@@ -9,18 +9,19 @@ import { TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from "@solana/spl-token";
 import { useUser } from "@/providers/UserProvider";
 import { usePrivy } from "@privy-io/react-auth";
 
+// Pull everything from your catalog (logos are local /public paths)
+import {
+  getCluster,
+  tokensForCluster,
+  getMintFor,
+  WSOL_MINT,
+  type TokenMeta,
+} from "@/lib/tokens";
+
 /* ------------------------------ config/env ------------------------------- */
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
-const SOL_MINT = "So11111111111111111111111111111111111111112";
 const LAMPORTS_PER_SOL = 1_000_000_000;
-
-// Jupiter Token API (metadata)
-const JUP_TOKENS_STRICT =
-  process.env.NEXT_PUBLIC_JUP_TOKENS_STRICT || "https://token.jup.ag/strict";
-const JUP_TOKENS_FALLBACK =
-  process.env.NEXT_PUBLIC_JUP_TOKENS_FALLBACK ||
-  "https://tokens.jup.ag/tokens?tags=verified";
 
 // Jupiter Price API V3
 const JUP_PRICE_BASE =
@@ -45,35 +46,24 @@ const EXCLUDED_MINTS = new Set<string>([
 
 /* -------------------------------- types ---------------------------------- */
 
-type TokenMeta = {
-  address: string; // mint
-  symbol: string;
-  name: string;
-  logoURI?: string | null;
-  decimals: number;
-};
-
 type PriceResp = Record<
   string,
   { usdPrice: number; decimals: number; priceChange24h?: number }
 >;
 
 type Holding = {
-  mint: string;
-  amountUi: number;
+  mint: string; // current cluster mint
+  amountUi: number; // human units
 };
 
 type ViewRow = {
-  mint: string;
-  symbol: string;
-  name: string;
-  logo?: string | null;
+  token: TokenMeta; // from catalog (gives us local logo/name/symbol)
   amount: number;
-  priceUsd: number; // store USD price
-  valueUsd: number; // store USD value
+  priceUsd: number; // price per unit in USD
+  valueUsd: number; // amount * priceUsd
 };
 
-/* ------------------------------ helpers ---------------------------------- */
+/* -------------------------------- utils ---------------------------------- */
 
 const chunk = <T,>(arr: T[], size: number) => {
   const out: T[][] = [];
@@ -92,106 +82,6 @@ function fmtMoney(v: number, currency: string) {
     return `${currency} ${v.toFixed(2)}`;
   }
 }
-
-// In case a USDC mint slips through the env set, also exclude by metadata.
-function shouldHideByMeta(meta?: TokenMeta | null) {
-  if (!meta) return false;
-  const sym = (meta.symbol || "").trim().toUpperCase();
-  const nm = (meta.name || "").trim().toUpperCase();
-  return sym === "USDC" || nm === "USD COIN" || nm.includes("USDC");
-}
-
-/* --------------------------- metadata fetchers ---------------------------- */
-
-async function fetchJupStrict(
-  ids: string[]
-): Promise<Record<string, TokenMeta>> {
-  if (!ids.length) return {};
-  const url = `${JUP_TOKENS_STRICT}?ids=${ids.join(",")}`;
-  const r = await fetch(url, { cache: "no-store" });
-  if (!r.ok) throw new Error(`strict ${r.status}`);
-  const j = await r.json();
-  const map: Record<string, TokenMeta> = {};
-  if (Array.isArray(j)) {
-    for (const t of j) {
-      if (!t?.address) continue;
-      map[t.address] = {
-        address: t.address,
-        symbol: t.symbol ?? "",
-        name: t.name ?? "",
-        logoURI: t.logoURI ?? null,
-        decimals: Number(t.decimals ?? 0),
-      };
-    }
-  } else if (j && typeof j === "object") {
-    for (const [mint, t] of Object.entries(j as Record<string, unknown>)) {
-      map[mint] = {
-        address: mint,
-        symbol:
-          typeof (t as Record<string, unknown>).symbol === "string"
-            ? ((t as Record<string, unknown>).symbol as string)
-            : "",
-        name:
-          typeof (t as Record<string, unknown>).name === "string"
-            ? ((t as Record<string, unknown>).name as string)
-            : "",
-        logoURI:
-          typeof (t as Record<string, unknown>).logoURI === "string"
-            ? ((t as Record<string, unknown>).logoURI as string)
-            : null,
-        decimals: Number(
-          (t as Record<string, unknown>).decimals as number | string | undefined
-        ) || 0,
-      };
-    }
-  }
-  return map;
-}
-
-async function fetchJupTokensFallback(
-  ids: string[]
-): Promise<Record<string, TokenMeta>> {
-  const r = await fetch(JUP_TOKENS_FALLBACK, { cache: "no-store" });
-  if (!r.ok) throw new Error(`tokens ${r.status}`);
-  const arrUnknown = (await r.json()) as unknown;
-  const arr = Array.isArray(arrUnknown) ? (arrUnknown as unknown[]) : [];
-  const idx = new Map<string, TokenMeta>();
-  for (const t of arr) {
-    const rec = (t ?? {}) as Record<string, unknown>;
-    const addr = (rec.address as string | undefined) ?? (rec.mint as string | undefined);
-    if (!addr) continue;
-    if (!ids.includes(addr)) continue;
-    idx.set(addr, {
-      address: addr,
-      symbol: (rec.symbol as string) ?? "",
-      name: (rec.name as string) ?? "",
-      logoURI: (rec.logoURI as string) ?? null,
-      decimals: Number((rec.decimals as number | string | undefined) ?? 0),
-    });
-  }
-  return Object.fromEntries(idx.entries());
-}
-
-async function fetchTokenMeta(
-  ids: string[]
-): Promise<Record<string, TokenMeta>> {
-  if (!ids.length) return {};
-  try {
-    const strict = await fetchJupStrict(ids);
-    const missing = ids.filter((m) => !strict[m]);
-    if (!missing.length) return strict;
-    const fb = await fetchJupTokensFallback(missing);
-    return { ...strict, ...fb };
-  } catch {
-    try {
-      return await fetchJupTokensFallback(ids);
-    } catch {
-      return {};
-    }
-  }
-}
-
-/* ------------------------------ price fetcher ----------------------------- */
 
 async function fetchUsdPrices(ids: string[]): Promise<PriceResp> {
   if (!ids.length) return {};
@@ -218,16 +108,36 @@ export default function WalletHoldings({
   const { ready: privyReady, authenticated, getAccessToken } = usePrivy();
 
   const currency = (user?.displayCurrency || "USD").toUpperCase();
-  const owner58 = user?.depositWallet?.address || null; // ✅ deposit wallet owner
+  const owner58 = user?.depositWallet?.address || null; // ✅ deposit wallet
+  const cluster = getCluster();
+
+  // Supported tokens for this cluster (from catalog)
+  const supportedTokens = useMemo(() => tokensForCluster(cluster), [cluster]);
+
+  // Index by current-cluster mint for quick lookups
+  const byClusterMint = useMemo(() => {
+    const map = new Map<string, TokenMeta>();
+    for (const t of supportedTokens) {
+      const mint = getMintFor(t, cluster);
+      if (mint) map.set(mint, t);
+    }
+    return map;
+  }, [supportedTokens, cluster]);
+
+  // Map to mainnet mints (for price API)
+  const mainnetMintFor = useCallback(
+    (t: TokenMeta) => getMintFor(t, "mainnet"),
+    []
+  );
 
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<ViewRow[]>([]); // USD-only rows
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [fxRate, setFxRate] = useState<number>(1); // USD -> display currency
-  const [collapsed, setCollapsed] = useState(false); // ▼ collapsible (default expanded)
+  const [collapsed, setCollapsed] = useState(false); // ▼ collapsible
 
-  // fetch USD→display FX (authorized so it actually returns CAD etc.)
+  // Fetch USD→display FX (authorized)
   const refreshFx = useCallback(async () => {
     if (currency === "USD") {
       setFxRate(1);
@@ -265,13 +175,16 @@ export default function WalletHoldings({
       const conn = new Connection(RPC, "confirmed");
       const owner = new PublicKey(owner58);
 
-      // 1) Native SOL
+      // 1) Native SOL balance (always map to WSOL mint in catalog indexing)
       const lamports = await conn.getBalance(owner, "confirmed");
       const solAmount = lamports / LAMPORTS_PER_SOL;
-      const holdings: Holding[] = [];
-      if (solAmount > 0) holdings.push({ mint: SOL_MINT, amountUi: solAmount });
 
-      // 2) SPL balances
+      const holdings: Holding[] = [];
+      if (solAmount > 0 && byClusterMint.has(WSOL_MINT)) {
+        holdings.push({ mint: WSOL_MINT, amountUi: solAmount });
+      }
+
+      // 2) SPL balances, but only keep those whose mint is in our catalog
       const [tokStd, tok22] = await Promise.all([
         conn.getParsedTokenAccountsByOwner(owner, {
           programId: TOKEN_PROGRAM_ID,
@@ -285,57 +198,60 @@ export default function WalletHoldings({
         mint?: string;
         tokenAmount?: { uiAmount?: number };
       };
+
       const addTokenAccounts = (accs: typeof tokStd) => {
         for (const it of accs.value) {
-          const info = (it.account.data.parsed as { info?: ParsedTokenInfo } | undefined)?.info;
+          const info = (
+            it.account.data.parsed as { info?: ParsedTokenInfo } | undefined
+          )?.info;
           const mint: string | undefined = info?.mint;
-          const amountUi: number | undefined = Number(info?.tokenAmount?.uiAmount ?? 0);
-          if (!mint) continue;
-          if (!amountUi || amountUi <= 0) continue;
-          if (EXCLUDED_MINTS.has(mint)) continue; // hide USDC
+          const amountUi: number | undefined = Number(
+            info?.tokenAmount?.uiAmount ?? 0
+          );
+          if (!mint || !amountUi || amountUi <= 0) continue;
+          if (!byClusterMint.has(mint)) continue; // ❗ only tokens we support
+          if (EXCLUDED_MINTS.has(mint)) continue; // hide USDC etc.
           holdings.push({ mint, amountUi });
         }
       };
       addTokenAccounts(tokStd);
       addTokenAccounts(tok22);
 
-      // Consolidate
+      // 3) Consolidate quantities per (supported) mint
       const byMint = new Map<string, number>();
-      for (const h of holdings)
+      for (const h of holdings) {
         byMint.set(h.mint, (byMint.get(h.mint) || 0) + h.amountUi);
-      const mints = Array.from(byMint.keys());
-
-      // 3) Metadata
-      const metaMap = await fetchTokenMeta(mints);
-
-      // SOL meta fallback
-      if (!metaMap[SOL_MINT]) {
-        metaMap[SOL_MINT] = {
-          address: SOL_MINT,
-          symbol: "SOL",
-          name: "Solana",
-          logoURI:
-            "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
-          decimals: 9,
-        };
       }
 
-      // 4) Prices (USD)
-      const pricedMints = mints.filter(
-        (m) =>
-          !!metaMap[m] &&
-          !EXCLUDED_MINTS.has(m) &&
-          !shouldHideByMeta(metaMap[m])
-      );
-      const prices = await fetchUsdPrices(pricedMints);
+      // 4) Build list of supported tokens the user actually holds (>0)
+      const heldTokens: TokenMeta[] = [];
+      for (const [mint, amount] of byMint.entries()) {
+        if (!amount || amount <= 0) continue;
+        const token = byClusterMint.get(mint);
+        if (token) heldTokens.push(token);
+      }
 
-      // 5) Build rows in USD (hide < $0.01)
+      if (heldTokens.length === 0) {
+        setRows([]);
+        setUpdatedAt(Date.now());
+        setLoading(false);
+        return;
+      }
+
+      // 5) Fetch USD prices using **mainnet** mints of the held tokens
+      const priceIds = heldTokens
+        .map((t) => mainnetMintFor(t))
+        .filter((m): m is string => !!m);
+      const prices = await fetchUsdPrices(Array.from(new Set(priceIds)));
+
+      // 6) Build rows in USD (hide < $0.01)
       const rowsUsd: ViewRow[] = [];
-      for (const mint of pricedMints) {
-        const amount = byMint.get(mint) || 0;
-        const meta = metaMap[mint];
-        if (!meta || shouldHideByMeta(meta)) continue;
-        const p = prices[mint];
+      for (const t of heldTokens) {
+        const clusterMint = getMintFor(t, cluster)!;
+        const amount = byMint.get(clusterMint) || 0;
+
+        const mainnetMint = mainnetMintFor(t);
+        const p = mainnetMint ? prices[mainnetMint] : undefined;
         if (!p) continue;
 
         const priceUsd = Number(p.usdPrice || 0);
@@ -343,10 +259,7 @@ export default function WalletHoldings({
         if (valueUsd < 0.01) continue;
 
         rowsUsd.push({
-          mint,
-          symbol: meta.symbol || "—",
-          name: meta.name || "Unknown",
-          logo: meta.logoURI ?? null,
+          token: t,
           amount,
           priceUsd,
           valueUsd,
@@ -355,7 +268,7 @@ export default function WalletHoldings({
 
       rowsUsd.sort((a, b) => b.valueUsd - a.valueUsd);
 
-      setRows(rowsUsd); // USD-only data in state
+      setRows(rowsUsd);
       setUpdatedAt(Date.now());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -363,7 +276,7 @@ export default function WalletHoldings({
     } finally {
       setLoading(false);
     }
-  }, [owner58]);
+  }, [owner58, byClusterMint, mainnetMintFor, cluster]);
 
   // Load FX first, then balances; re-run if currency changes
   useEffect(() => {
@@ -459,15 +372,12 @@ export default function WalletHoldings({
             <ul className={`grid ${grid} gap-3`}>
               {rows.map((r) => (
                 <li
-                  key={r.mint}
+                  key={`${r.token.symbol}-${getMintFor(r.token, cluster)}`}
                   className="rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur p-3 flex items-center gap-3"
                 >
                   <Image
-                    src={
-                      r.logo ||
-                      "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
-                    }
-                    alt={`${r.name} logo`}
+                    src={r.token.logo || "/logos/default.png"}
+                    alt={`${r.token.name} logo`}
                     width={36}
                     height={36}
                     className="h-9 w-9 rounded-full border border-white/10 object-contain bg-zinc-800"
@@ -476,9 +386,9 @@ export default function WalletHoldings({
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-white font-medium truncate">
-                          {r.name}{" "}
+                          {r.token.name}{" "}
                           <span className="text-xs text-zinc-400">
-                            ({r.symbol})
+                            ({r.token.symbol})
                           </span>
                         </div>
                         <div className="text-[11px] text-zinc-500">
