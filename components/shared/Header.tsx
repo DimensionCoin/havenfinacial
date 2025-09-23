@@ -1,4 +1,3 @@
-// app/components/Header.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
@@ -87,9 +86,9 @@ export default function Header() {
   return (
     <>
       <header className="sticky top-0 z-40 w-full border-b border-border bg-background/40 backdrop-blur">
-        <div className="mx-auto flex h-16 items-center justify-between px-4 md:px-6 mt-10 sm:mt-0">
+        <div className="mx-auto flex h-26 sm:h-16 items-center justify-between px-4 md:px-6 sm:mt-0">
           {/* left: logo + greeting */}
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 flex-shrink-0 mt-8 sm:mt-0">
             <div className="flex items-center gap-3">
               <Link href={homeHref}>
                 <div className="flex gap-3">
@@ -121,8 +120,7 @@ export default function Header() {
             </div>
           </div>
 
-          {/* center: nav */}
-          <nav className="hidden md:flex items-center gap-1">
+          <nav className="hidden md:flex items-center gap-1 absolute left-1/2 transform -translate-x-1/2">
             {NAV.map((item) => {
               const active = pathname === item.href;
               return (
@@ -141,8 +139,7 @@ export default function Header() {
             })}
           </nav>
 
-          {/* right: actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 mt-8 sm:mt-0">
             {isAuthed ? (
               <>
                 <NotificationBell />
@@ -185,6 +182,7 @@ export default function Header() {
                       >
                         Log out
                       </button>
+
                       <AddToHomeButton
                         variant="menu"
                         onDone={() => setMenuOpen(false)}
@@ -193,6 +191,7 @@ export default function Header() {
                   )}
                 </div>
 
+                {/* Hamburger (mobile only) */}
                 <button
                   aria-label="Open menu"
                   onClick={() => setSidebarOpen(true)}

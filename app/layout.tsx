@@ -19,14 +19,13 @@ export const metadata: Metadata = {
   title: "Haven",
   description: "Send USDC by email and grow your savings with Solana DeFi.",
   manifest: "/manifest.webmanifest",
-  themeColor: "#b6ff3e",
   icons: {
     icon: [
-      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
-      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+      { url: "/icons/logo.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/logo.png", sizes: "512x512", type: "image/png" },
     ],
     apple: [
-      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/logo.png", sizes: "192x192", type: "image/png" },
     ],
   },
   appleWebApp: {
