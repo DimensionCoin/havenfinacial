@@ -28,8 +28,8 @@ function isInStandalone() {
     (window.matchMedia &&
       window.matchMedia("(display-mode: standalone)").matches) ||
     // iOS Safari flag
-    ((window.navigator as Navigator & { standalone?: boolean }).standalone ===
-      true)
+    (window.navigator as Navigator & { standalone?: boolean }).standalone ===
+      true
   );
 }
 
@@ -65,10 +65,7 @@ export default function AddToHomeButton({
     if (iOS) setEligible(true);
 
     return () =>
-      window.removeEventListener(
-        "beforeinstallprompt",
-        onBIP as EventListener
-      );
+      window.removeEventListener("beforeinstallprompt", onBIP as EventListener);
   }, [iOS]);
 
   if (!eligible) return null;
