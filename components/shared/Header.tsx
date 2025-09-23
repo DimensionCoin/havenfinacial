@@ -8,6 +8,7 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
 import NotificationBell from "./NotificationBell";
 import AddToHomeButton from "./AddToHomeButton";
+import useStandalone from "@/hooks/useStandalone";
 
 const NAV = [
   { name: "Dashboard", href: "/dashboard" },
@@ -26,13 +27,14 @@ export default function Header() {
   const pathname = usePathname();
   const router = useRouter();
 
-  // from our provider
   const { user, loading } = useUser();
-
-  // only used to end Privy session on logout
   const { logout: privyLogout } = usePrivy();
 
-  // click-away + Esc handlers
+  const isStandalone = useStandalone();
+  // Toggle sizes: PWA (standalone) vs browser
+  const headerH = isStandalone ? "h-26" : "h-14"; // or "h-[6.5rem]" instead of h-26
+  const itemsMt = isStandalone ? "mt-9" : "mt-0";
+
   useEffect(() => {
     function onClick(e: MouseEvent) {
       const t = e.target as Node;
@@ -61,12 +63,10 @@ export default function Header() {
   }, [menuOpen]);
 
   const isAuthed = !!user && !loading;
-
   const firstName = (user?.firstName || "").trim();
   const email = user?.email || "";
-  const displayName = firstName || email || "User"; // ← ONLY first name (fallbacks only)
+  const displayName = firstName || email || "User";
   const avatarInitial = (firstName || email || "U").charAt(0).toUpperCase();
-
   const homeHref = isAuthed ? "/dashboard" : "/";
 
   const handleLogout = async () => {
@@ -86,41 +86,42 @@ export default function Header() {
   return (
     <>
       <header className="sticky top-0 z-40 w-full border-b border-border bg-background/40 backdrop-blur">
-        <div className="mx-auto flex h-26 sm:h-16 items-center justify-between px-4 md:px-6 sm:mt-0">
-          {/* left: logo + greeting */}
-          <div className="flex items-center gap-4 flex-shrink-0 mt-9 sm:mt-0">
-            <div className="flex items-center gap-3">
-              <Link href={homeHref}>
-                <div className="flex gap-3">
-                  <div className="flex h-8 w-8 items-center justify-center rounded-full">
-                    <Image
-                      src={"/logo.jpg"}
-                      alt="logo"
-                      width={60}
-                      height={60}
-                      className="rounded-full mt-1"
-                    />
-                  </div>
-                  <div>
-                    {isAuthed ? (
-                      <>
-                        <p className="text-xs text-muted-foreground">Hello,</p>
-                        <p className="font-semibold text-foreground">
-                          {displayName}
-                        </p>
-                      </>
-                    ) : (
-                      <span className="font-semibold text-foreground">
-                        Haven Bank
-                      </span>
-                    )}
-                  </div>
+        <div
+          className={`mx-auto flex items-center justify-between px-4 md:px-6 ${headerH}`}
+        >
+          {/* LEFT: logo + greeting */}
+          <div className={`flex items-center gap-4 flex-shrink-0 ${itemsMt}`}>
+            <Link href={homeHref}>
+              <div className="flex gap-3">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full">
+                  <Image
+                    src={"/logo.jpg"}
+                    alt="logo"
+                    width={60}
+                    height={60}
+                    className="rounded-full mt-1"
+                  />
                 </div>
-              </Link>
-            </div>
+                <div>
+                  {isAuthed ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">Hello,</p>
+                      <p className="font-semibold text-foreground">
+                        {displayName}
+                      </p>
+                    </>
+                  ) : (
+                    <span className="font-semibold text-foreground">
+                      Haven Bank
+                    </span>
+                  )}
+                </div>
+              </div>
+            </Link>
           </div>
 
-          <nav className="hidden md:flex items-center gap-1 absolute left-1/2 transform -translate-x-1/2">
+          {/* CENTER: nav (md+ absolute centered) */}
+          <nav className="hidden md:flex items-center gap-1 absolute left-1/2 -translate-x-1/2">
             {NAV.map((item) => {
               const active = pathname === item.href;
               return (
@@ -139,7 +140,8 @@ export default function Header() {
             })}
           </nav>
 
-          <div className="flex items-center gap-3 mt-9 sm:mt-0">
+          {/* RIGHT: bell + user dropdown + hamburger */}
+          <div className={`flex items-center gap-3 ${itemsMt}`}>
             {isAuthed ? (
               <>
                 <NotificationBell />
@@ -224,7 +226,7 @@ export default function Header() {
         </div>
       </header>
 
-      {/* sidebar drawer */}
+      {/* Sidebar drawer (unchanged) */}
       {sidebarOpen && (
         <>
           <div
