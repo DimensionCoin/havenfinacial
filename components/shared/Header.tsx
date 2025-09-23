@@ -8,6 +8,7 @@ import Image from "next/image";
 import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
 import NotificationBell from "./NotificationBell";
+import AddToHomeButton from "./AddToHomeButton";
 
 const NAV = [
   { name: "Dashboard", href: "/dashboard" },
@@ -144,7 +145,7 @@ export default function Header() {
           <div className="flex items-center gap-3">
             {isAuthed ? (
               <>
-                <NotificationBell/>
+                <NotificationBell />
 
                 <div className="relative">
                   <button
@@ -184,6 +185,10 @@ export default function Header() {
                       >
                         Log out
                       </button>
+                      <AddToHomeButton
+                        variant="menu"
+                        onDone={() => setMenuOpen(false)}
+                      />
                     </div>
                   )}
                 </div>

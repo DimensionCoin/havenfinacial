@@ -1,30 +1,24 @@
-// components/crypto/TokenCatalog.tsx
 "use client";
 
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import Image from "next/image";
-import { X, ChevronDown, RefreshCw } from "lucide-react";
+import { X, RefreshCw } from "lucide-react";
 import {
-  TokenMeta,
+  type TokenMeta,
   tokensForCluster,
-  getCluster,
   getMintFor,
-  TokenCategory,
+  type TokenCategory,
 } from "@/lib/tokens";
 import { useUser } from "@/providers/UserProvider";
 import { usePrivy } from "@privy-io/react-auth";
+import { useServerSponsoredJupSwap } from "@/hooks/useServerSponsoredJupSwap.ts";
 
 /* ------------------------------- config ---------------------------------- */
 
 type Props = {
-  /** Called when user confirms an amount to buy. */
   onStartBuy?: (args: { token: TokenMeta; amountFiat: number }) => void;
-  /** If provided, only show these categories (in this order). */
   categories?: TokenCategory[];
-  /** How often to refresh prices (ms). Set 0 to disable polling. */
   pollMs?: number;
-  /** Start collapsed (can be toggled by the user). */
-  defaultCollapsed?: boolean;
   className?: string;
 };
 
@@ -35,21 +29,19 @@ const DEFAULT_CATEGORY_ORDER: TokenCategory[] = [
   "Stocks",
 ];
 
-// Price API
+const MAINNET = "mainnet"; // ❗ force mainnet everywhere
+
+// Price + Quote APIs (Jupiter Lite)
 const JUP_PRICE_BASE =
   process.env.NEXT_PUBLIC_JUP_PRICE_BASE || "https://lite-api.jup.ag/price/v3";
-
-// Quote API
 const JUP_QUOTE_BASE =
   process.env.NEXT_PUBLIC_JUP_QUOTE_BASE ||
   "https://lite-api.jup.ag/swap/v1/quote";
 
-// Mainnet USDC (input token for buys)
+// USDC settings
 const USDC_MAINNET =
   process.env.NEXT_PUBLIC_USDC_MAINNET_MINT ||
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
-
-// USDC decimals
 const USDC_DECIMALS = 6;
 
 // Flat service fee (USD)
@@ -86,17 +78,28 @@ export default function TokenCatalog({
   onStartBuy,
   categories,
   pollMs = 45_000,
-  defaultCollapsed = false,
   className = "",
 }: Props) {
   const { user } = useUser();
   const { getAccessToken, ready: privyReady, authenticated } = usePrivy();
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  const cluster = getCluster();
-  const all = useMemo(() => tokensForCluster(cluster), [cluster]);
+  const depositOwnerBase58 = useMemo(() => {
+    const u = user as unknown;
+    if (u && typeof u === "object") {
+      const rec = u as Record<string, unknown>;
+      const dep = rec.depositWallet as Record<string, unknown> | undefined;
+      const w = rec.wallet as Record<string, unknown> | undefined;
+      const a1 = typeof dep?.address === "string" ? (dep.address as string) : undefined;
+      const a2 = typeof w?.address === "string" ? (w.address as string) : undefined;
+      return a1 || a2 || "";
+    }
+    return "";
+  }, [user]);
 
-  // Optionally filter by categories prop
+  // ❗ Force mainnet token list
+  const all = useMemo(() => tokensForCluster(MAINNET), []);
+
   const filtered = useMemo(
     () =>
       categories?.length
@@ -105,7 +108,6 @@ export default function TokenCatalog({
     [all, categories]
   );
 
-  // Group by category; only include categories that actually have tokens
   const categoryOrder: TokenCategory[] = categories?.length
     ? categories
     : DEFAULT_CATEGORY_ORDER;
@@ -114,8 +116,7 @@ export default function TokenCatalog({
     const map = new Map<TokenCategory, TokenMeta[]>();
     for (const cat of categoryOrder) map.set(cat, []);
     for (const t of filtered) {
-      if (!t.category) continue;
-      if (!map.has(t.category)) continue;
+      if (!t.category || !map.has(t.category)) continue;
       map.get(t.category)!.push(t);
     }
     return categoryOrder
@@ -129,7 +130,7 @@ export default function TokenCatalog({
     const s = new Set<string>();
     for (const [, tokens] of grouped) {
       for (const t of tokens) {
-        const id = getMintFor(t, "mainnet");
+        const id = getMintFor(t, MAINNET);
         if (id) s.add(id);
       }
     }
@@ -163,8 +164,7 @@ export default function TokenCatalog({
   }, [priceIds, fetchPrices]);
 
   useEffect(() => {
-    if (!pollMs || pollMs <= 0) return;
-    if (!priceIds.length) return;
+    if (!pollMs || pollMs <= 0 || !priceIds.length) return;
     const id = setInterval(() => void fetchPrices(priceIds), pollMs);
     return () => clearInterval(id);
   }, [priceIds, pollMs, fetchPrices]);
@@ -202,27 +202,6 @@ export default function TokenCatalog({
     };
   }, [displayCurrency, getAccessToken, privyReady, authenticated]);
 
-  /* ------------------------------ collapse state --------------------------- */
-
-  const STORAGE_KEY = "invest.tokens.collapsed";
-  const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw == null) return defaultCollapsed;
-      return raw === "1";
-    } catch {
-      return defaultCollapsed;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, collapsed ? "1" : "0");
-    } catch {
-      /* ignore */
-    }
-  }, [collapsed]);
-
   /* ------------------------------ UI helpers ------------------------------ */
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -246,7 +225,7 @@ export default function TokenCatalog({
         maximumFractionDigits: v < 1 ? 6 : 2,
       }).format(v);
     } catch {
-      return `${displayCurrency} ${v.toFixed(2)}`;
+      return `${displayCurrency} ${Number(v).toFixed(2)}`;
     }
   };
 
@@ -260,157 +239,173 @@ export default function TokenCatalog({
 
   return (
     <div
-      className={`rounded-2xl border border-white/10 bg-zinc-900/70 backdrop-blur-xl shadow-2xl ${className}`}
+      className={`rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] shadow-2xl ${className}`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-[rgb(182,255,62)]/20 to-transparent border border-[rgb(182,255,62)]/30 flex items-center justify-center">
-            <span className="text-[rgb(182,255,62)] font-bold text-xs">
+      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
+        <div className="flex items-center gap-4">
+          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-[rgb(182,255,62)]/20 to-transparent border border-[rgb(182,255,62)]/30 flex items-center justify-center backdrop-blur-sm">
+            <span className="text-[rgb(182,255,62)] font-bold text-sm">
               INV
             </span>
           </div>
           <div>
-            <div className="text-white font-semibold leading-tight">Invest</div>
-            <div className="text-[11px] text-zinc-400 leading-tight">
+            <div className="text-white font-semibold text-lg leading-tight">
+              Invest
+            </div>
+            <div className="text-sm text-white/60 leading-tight">
               Buy top tokens with one tap. Gas sponsored.
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void fetchPrices(priceIds)}
-            disabled={pricesLoading || !priceIds.length}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/10 text-white/80 disabled:opacity-50"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${pricesLoading ? "animate-spin" : ""}`}
-            />
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90"
-            aria-expanded={!collapsed}
-            aria-controls="invest-token-list"
-          >
-            <ChevronDown
-              className={`h-4 w-4 transition-transform ${
-                collapsed ? "-rotate-90" : ""
-              }`}
-            />
-            {collapsed ? "Expand" : "Collapse"}
-          </button>
-        </div>
+        {/* Refresh button */}
+        <button
+          type="button"
+          onClick={() => void fetchPrices(priceIds)}
+          disabled={pricesLoading || !priceIds.length}
+          className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-xl border border-white/20 hover:bg-white/10 text-white/80 disabled:opacity-50 transition-all duration-200 backdrop-blur-sm"
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${pricesLoading ? "animate-spin" : ""}`}
+          />
+          Refresh
+        </button>
       </div>
 
       {/* Body */}
-      <div
-        id="invest-token-list"
-        className={`transition-[max-height,opacity] duration-300 ease-out ${
-          collapsed
-            ? "max-h-0 opacity-0 overflow-hidden"
-            : "max-h-[4000px] opacity-100"
-        }`}
-      >
-        <div className="p-4">
-          {grouped.length === 0 ? (
-            <div className="text-sm text-zinc-400">
-              No tokens are enabled for {cluster}. Add mints to{" "}
-              <code>mints.{cluster}</code> in <code>/lib/tokens.ts</code>.
+      <div className="p-6">
+        {grouped.length === 0 ? (
+          <div className="text-center py-12">
+            <div className="text-white/60 mb-2">No tokens available</div>
+            <div className="text-sm text-white/40">
+              Add mints to{" "}
+              <code className="bg-white/10 px-2 py-1 rounded">
+                mints.mainnet
+              </code>{" "}
+              in{" "}
+              <code className="bg-white/10 px-2 py-1 rounded">
+                /lib/tokens.ts
+              </code>
             </div>
-          ) : (
-            <div className="space-y-6">
-              {grouped.map(([cat, tokens]) => (
-                <section key={cat}>
-                  <h4 className="mb-2 text-xs font-semibold tracking-wider text-zinc-400 uppercase">
-                    {cat}
-                  </h4>
+          </div>
+        ) : (
+          <div className="space-y-8">
+            {grouped.map(([cat, tokens]) => (
+              <section key={cat}>
+                <h4 className="mb-4 text-sm font-semibold tracking-wider text-white/70 uppercase flex items-center gap-2">
+                  <div className="h-1 w-8 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full"></div>
+                  {cat}
+                </h4>
 
-                  {/* Grid */}
-                  <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {tokens.map((t) => {
-                      const mainnetMint = getMintFor(t, "mainnet");
-                      const p = mainnetMint ? prices[mainnetMint] : undefined;
-                      const usd = p?.usdPrice;
-                      const local =
-                        typeof usd === "number" ? usd * fxRate : undefined;
-                      const change = p?.priceChange24h;
-                      const changeStr = fmtChange(change);
-                      const changeColor =
-                        typeof change === "number"
-                          ? change > 0
-                            ? "text-emerald-400"
-                            : change < 0
-                            ? "text-red-400"
-                            : "text-zinc-400"
-                          : "text-zinc-500";
+                {/* Grid */}
+                <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {tokens.map((t) => {
+                    const mainnetMint = getMintFor(t, MAINNET);
+                    const p = mainnetMint ? prices[mainnetMint] : undefined;
+                    const usd = p?.usdPrice;
+                    const local =
+                      typeof usd === "number" ? usd * fxRate : undefined;
+                    const change = p?.priceChange24h;
+                    const changeStr = fmtChange(change);
+                    const changeColor =
+                      typeof change === "number"
+                        ? change > 0
+                          ? "text-[rgb(182,255,62)]"
+                          : change < 0
+                          ? "text-red-400"
+                          : "text-white/40"
+                        : "text-white/30";
 
-                      return (
-                        <li
-                          key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
-                          className="rounded-xl border border-white/10 bg-zinc-900/60 hover:bg-zinc-900/80 transition-colors p-3 flex items-center gap-3"
-                        >
-                          <Image
-                            src={
-                              t.logo ||
-                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
-                            }
-                            alt={`${t.name} logo`}
-                            width={36}
-                            height={36}
-                            className="h-9 w-9 rounded-full border border-white/10 object-contain bg-zinc-800"
-                          />
+                    const disabled =
+                      !mainnetMint ||
+                      !depositOwnerBase58 ||
+                      !privyReady ||
+                      !authenticated;
+
+                    return (
+                      <li
+                        key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
+                        className="group rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 transition-all duration-300 p-4 backdrop-blur-sm"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="relative">
+                            <Image
+                              src={
+                                t.logo ||
+                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                                "/placeholder.svg" ||
+                                "/placeholder.svg" ||
+                                "/placeholder.svg" ||
+                                "/placeholder.svg"
+                              }
+                              alt={`${t.name} logo`}
+                              width={48}
+                              height={48}
+                              className="h-12 w-12 rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
+                            />
+                            {pricesLoading && (
+                              <div className="absolute -top-1 -right-1 h-3 w-3 bg-[rgb(182,255,62)] rounded-full animate-pulse"></div>
+                            )}
+                          </div>
+
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-white font-medium truncate">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-white font-semibold truncate text-lg">
                                 {t.name}
                               </span>
-                              <span className="text-xs text-zinc-400">
-                                ({t.symbol})
+                              <span className="text-sm text-white/50 font-medium">
+                                {t.symbol}
                               </span>
                             </div>
-                            <div className="mt-0.5 text-[12px] text-zinc-400 flex items-center gap-2">
-                              <span className="text-white/90 font-medium">
+
+                            <div className="flex items-center gap-3 mb-3">
+                              <span className="text-white/90 font-semibold text-lg">
                                 {fmtMoney(local)}
                               </span>
                               {changeStr && (
-                                <span className={`text-[11px] ${changeColor}`}>
+                                <span
+                                  className={`text-sm font-medium ${changeColor} flex items-center gap-1`}
+                                >
+                                  {typeof change === "number" &&
+                                    change > 0 &&
+                                    "↗"}
+                                  {typeof change === "number" &&
+                                    change < 0 &&
+                                    "↘"}
                                   {changeStr}
                                 </span>
                               )}
-                              {pricesLoading && (
-                                <span className="text-[10px] text-zinc-500">
-                                  • updating…
-                                </span>
-                              )}
                             </div>
-                          </div>
 
-                          <button
-                            type="button"
-                            onClick={() => openBuy(t)}
-                            className="text-sm px-3 py-1.5 rounded-lg bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-colors"
-                          >
-                            Buy
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              ))}
-              {pricesError && (
-                <div className="text-xs text-red-400">
-                  Failed to fetch prices: {pricesError}
+                            <button
+                              type="button"
+                              onClick={() => openBuy(t)}
+                              disabled={disabled}
+                              className="w-full text-sm px-4 py-2.5 rounded-xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-lg hover:shadow-xl group-hover:scale-[1.02]"
+                            >
+                              Buy {t.symbol}
+                            </button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+            {pricesError && (
+              <div className="text-center p-4 rounded-xl bg-red-500/10 border border-red-500/20">
+                <div className="text-red-400 font-medium">
+                  Failed to fetch prices
                 </div>
-              )}
-            </div>
-          )}
-        </div>
+                <div className="text-red-400/70 text-sm mt-1">
+                  {pricesError}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Buy modal */}
@@ -421,10 +416,11 @@ export default function TokenCatalog({
           fxRate={fxRate}
           jupQuoteBase={JUP_QUOTE_BASE}
           jupPriceBase={JUP_PRICE_BASE}
+          depositOwnerBase58={depositOwnerBase58}
+          getAccessToken={getAccessToken}
           onClose={closeModal}
           onConfirm={(amountFiat) => {
             onStartBuy?.({ token: selected, amountFiat });
-            closeModal();
           }}
         />
       )}
@@ -440,6 +436,8 @@ function BuyModal({
   fxRate,
   jupQuoteBase,
   jupPriceBase,
+  depositOwnerBase58,
+  getAccessToken,
   onClose,
   onConfirm,
 }: {
@@ -448,22 +446,31 @@ function BuyModal({
   fxRate: number; // USD→display
   jupQuoteBase: string;
   jupPriceBase: string;
+  depositOwnerBase58: string;
+  getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onConfirm: (amountFiat: number) => void;
 }) {
+  const {
+    swap,
+    loading: swapping,
+    signature,
+    error: swapError,
+  } = useServerSponsoredJupSwap();
+
   const [amountStr, setAmountStr] = useState<string>("50");
   const amountDisplay = Number(amountStr);
   const spendValid =
     Number.isFinite(amountDisplay) &&
     amountDisplay > FLAT_FEE_USD * (displayCurrency === "USD" ? 1 : fxRate);
 
-  const outputMint = getMintFor(token, "mainnet") || ""; // quote on mainnet mints
+  const outputMint = getMintFor(token, MAINNET) || ""; // ❗ mainnet mint only
   const [outDecimals, setOutDecimals] = useState<number | null>(null);
   const [quote, setQuote] = useState<JupQuote>(null);
   const [qLoading, setQLoading] = useState(false);
   const [qError, setQError] = useState<string | null>(null);
 
-  // one-time (per token) decimals fetch via Price API (to format outAmount)
+  // one-time (per token) decimals fetch for UI
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -483,18 +490,15 @@ function BuyModal({
     };
   }, [outputMint, jupPriceBase]);
 
-  // compute net-USDC input (after flat $0.20 fee)
   const computeInAmountRaw = (): number => {
     if (!spendValid) return 0;
-    // display → USD
     const amountUsdGross =
       displayCurrency === "USD" ? amountDisplay : amountDisplay / fxRate;
     const amountUsdNet = Math.max(0, amountUsdGross - FLAT_FEE_USD);
-    // USDC ~ USD; convert to raw
     return Math.floor(amountUsdNet * 10 ** USDC_DECIMALS);
   };
 
-  // debounced auto-quote whenever amount changes
+  // Quote USDC -> token for the preview panel
   useEffect(() => {
     if (!outputMint) return;
     let cancelled = false;
@@ -510,7 +514,9 @@ function BuyModal({
           return;
         }
 
-        const url = `${jupQuoteBase}?inputMint=${USDC_MAINNET}&outputMint=${outputMint}&amount=${inAmount}&slippageBps=50&restrictIntermediateTokens=true`;
+        const url =
+          `${jupQuoteBase}?inputMint=${USDC_MAINNET}&outputMint=${outputMint}&amount=${inAmount}` +
+          `&slippageBps=50&restrictIntermediateTokens=true&dynamicSlippage=true`;
         const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) throw new Error(`quote ${res.status}`);
         const j = (await res.json()) as JupQuote;
@@ -532,138 +538,210 @@ function BuyModal({
 
   const outAmountUi =
     quote && outDecimals != null
-      ? Number(quote.outAmount) / 10 ** outDecimals
+      ? Number(quote.outAmount) / 10 ** (outDecimals || 6)
       : null;
 
   const feeInDisplay =
     displayCurrency === "USD" ? FLAT_FEE_USD : FLAT_FEE_USD * fxRate;
 
-  const fmtToken = (v?: number | null) => {
-    if (v == null || !Number.isFinite(v)) return "—";
-    const dp = v < 1 ? 6 : 4;
-    return new Intl.NumberFormat(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: dp,
-    }).format(v);
-  };
+  const fmtToken = (v?: number | null) =>
+    v == null || !Number.isFinite(v)
+      ? "—"
+      : new Intl.NumberFormat(undefined, {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: v < 1 ? 6 : 4,
+        }).format(v);
 
-  const canSwap = spendValid && !!quote && !qLoading;
+  const canSwap =
+    !!depositOwnerBase58 &&
+    spendValid &&
+    !!quote &&
+    !qLoading &&
+    !!outputMint &&
+    !swapping;
+
+  const onBuy = useCallback(async () => {
+    if (!canSwap || !outputMint) return;
+    try {
+      const accessToken = await getAccessToken().catch(() => null);
+      await swap({
+        fromOwnerBase58: depositOwnerBase58,
+        outputMint,
+        amountDisplay, // local currency the user entered
+        fxRate, // local → USD conversion
+        accessToken,
+      });
+      onConfirm(amountDisplay);
+      onClose();
+    } catch {
+      /* error is rendered below */
+    }
+  }, [
+    canSwap,
+    outputMint,
+    getAccessToken,
+    swap,
+    depositOwnerBase58,
+    amountDisplay,
+    fxRate,
+    onConfirm,
+    onClose,
+  ]);
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
       aria-modal="true"
       role="dialog"
     >
-      {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
-
-      {/* Dialog */}
-      <div className="relative w-full max-w-md mx-4 rounded-2xl border border-white/10 bg-zinc-900/95 p-5 shadow-2xl">
-        <div className="flex items-center justify-between">
-          <h4 className="text-white font-semibold">Buy {token.name}</h4>
+      <div className="relative w-full max-w-lg rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] p-6 shadow-2xl">
+        <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center gap-3">
+            <Image
+              src={
+                token.logo ||
+                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                "/placeholder.svg" ||
+                "/placeholder.svg" ||
+                "/placeholder.svg" ||
+                "/placeholder.svg"
+              }
+              alt={`${token.name} logo`}
+              width={40}
+              height={40}
+              className="h-10 w-10 rounded-xl border border-white/20 object-contain bg-white/5"
+            />
+            <div>
+              <h4 className="text-white font-semibold text-lg">
+                Buy {token.name}
+              </h4>
+              <div className="text-white/60 text-sm">{token.symbol}</div>
+            </div>
+          </div>
           <button
             aria-label="Close"
             onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/10 text-zinc-300"
+            className="p-2 rounded-xl hover:bg-white/10 text-white/60 hover:text-white transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="mt-4 flex items-start gap-3">
-          <Image
-            src={
-              token.logo ||
-              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
-            }
-            alt={`${token.name} logo`}
-            width={40}
-            height={40}
-            className="h-10 w-10 rounded-lg border border-white/10 object-contain bg-zinc-800"
-          />
-        </div>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-white/80 mb-2">
+              Spend ({displayCurrency})
+            </label>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value)}
+              className="w-full rounded-xl border border-white/20 bg-white/5 backdrop-blur-sm px-4 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/50 focus:border-[rgb(182,255,62)] transition-all"
+              placeholder="0.00"
+              inputMode="decimal"
+            />
 
-        <div className="mt-5 space-y-2">
-          <label className="text-sm text-zinc-300">
-            Spend ({displayCurrency})
-          </label>
-          <input
-            type="number"
-            min="0"
-            step="0.01"
-            value={amountStr}
-            onChange={(e) => setAmountStr(e.target.value)}
-            className="w-full rounded-xl border border-zinc-700 bg-zinc-800/60 px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/50 focus:border-[rgb(182,255,62)]"
-            placeholder="0.00"
-            inputMode="decimal"
-          />
-
-          <div className="text-[11px] text-zinc-500">
-            Flat fee:{" "}
-            <span className="text-white/80">
-              {new Intl.NumberFormat(undefined, {
-                style: "currency",
-                currency: displayCurrency,
-                maximumFractionDigits: 2,
-              }).format(feeInDisplay)}
-            </span>{" "}
-            (deducted from what’s swapped)
+            <div className="text-sm text-white/50 mt-2">
+              Processing fee:{" "}
+              <span className="text-white/80 font-medium">
+                {new Intl.NumberFormat(undefined, {
+                  style: "currency",
+                  currency: displayCurrency,
+                  maximumFractionDigits: 2,
+                }).format(feeInDisplay)}
+              </span>{" "}
+              (deducted before purchase)
+            </div>
           </div>
 
           {/* Quote panel */}
-          <div className="mt-3 rounded-lg border border-white/10 bg-zinc-800/40 p-3">
+          <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-4">
             {!spendValid ? (
-              <div className="text-xs text-red-400">
-                Enter an amount greater than the fee.
+              <div className="text-center py-4">
+                <div className="text-red-400 font-medium">Invalid amount</div>
+                <div className="text-red-400/70 text-sm">
+                  Enter an amount greater than the fee
+                </div>
               </div>
             ) : qLoading ? (
-              <div className="text-xs text-white/70">Fetching quote…</div>
+              <div className="text-center py-4">
+                <div className="text-white/70">Getting live price...</div>
+                <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+                  <div className="h-full bg-[rgb(182,255,62)] rounded-full animate-pulse w-1/2"></div>
+                </div>
+              </div>
             ) : qError ? (
-              <div className="text-xs text-red-400">Quote failed: {qError}</div>
+              <div className="text-center py-4">
+                <div className="text-red-400 font-medium">
+                  Price fetch failed
+                </div>
+                <div className="text-red-400/70 text-sm">{qError}</div>
+              </div>
             ) : quote && outAmountUi != null ? (
-              <div className="space-y-1 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-zinc-400">Estimated receive:</span>
-                  <span className="text-white font-medium">
+              <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-white/60">You&#39;ll receive:</span>
+                  <span className="text-white font-semibold text-lg">
                     {fmtToken(outAmountUi)} {token.symbol}
                   </span>
                 </div>
                 {quote.priceImpactPct && (
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-zinc-500">Price impact:</span>
-                    <span className="text-zinc-300">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-white/50">Price impact:</span>
+                    <span className="text-white/70">
                       {(Number(quote.priceImpactPct) * 100).toFixed(2)}%
                     </span>
                   </div>
                 )}
+                <div className="h-px bg-white/10"></div>
+                <div className="text-xs text-white/40 text-center">
+                  Live quote • Updates automatically
+                </div>
               </div>
             ) : (
-              <div className="text-xs text-white/60">
-                Enter an amount to see a quote.
+              <div className="text-center py-4 text-white/50">
+                Enter an amount to see a live price
               </div>
             )}
           </div>
+
+          {/* Purchase state */}
+          {swapError && (
+            <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4">
+              <div className="text-red-400 font-medium">Purchase failed</div>
+              <div className="text-red-400/70 text-sm mt-1">{swapError}</div>
+            </div>
+          )}
+          {signature && (
+            <div className="rounded-xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
+              <div className="text-[rgb(182,255,62)] font-medium">
+                Purchase submitted successfully!
+              </div>
+            </div>
+          )}
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
+        <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-white/10">
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-2 text-sm rounded-lg border border-white/10 text-white/80 hover:bg-white/10"
+            className="px-6 py-2.5 text-sm rounded-xl border border-white/20 text-white/80 hover:bg-white/10 transition-all duration-200"
           >
             Cancel
           </button>
           <button
             type="button"
             disabled={!canSwap}
-            onClick={() => onConfirm(amountDisplay)}
-            className="px-3 py-2 text-sm rounded-lg bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={onBuy}
+            className="px-6 py-2.5 text-sm rounded-xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-lg hover:shadow-xl"
           >
-            Swap
+            {swapping ? "Processing..." : `Buy ${token.symbol}`}
           </button>
         </div>
       </div>

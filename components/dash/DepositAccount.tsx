@@ -75,9 +75,14 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-function mask(addr?: string | null) {
-  if (!addr || addr.length < 4) return "****-****-0000";
-  return `****-****-${addr.slice(-4)}`;
+function mask(addr?: string | null): string {
+  if (!addr || addr.length < 8) return "****-****-0000";
+  return `${addr.slice(0, 4)}-****-****-${addr.slice(-4)}`;
+}
+
+function maskMobile(addr?: string | null): string {
+  if (!addr || addr.length < 4) return "-****-0000";
+  return `-****-${addr.slice(-4)}`;
 }
 
 /* ---------------------------- SPL helpers -------------------------------- */
@@ -314,7 +319,7 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
       await navigator.clipboard.writeText(walletAddress);
       toast.success("Wallet address copied");
     } catch {
-      toast.error("Couldn’t copy wallet address");
+      toast.error("Couldn't copy wallet address");
     }
   }, [walletAddress]);
 
@@ -366,89 +371,144 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
   // Quick guard for misconfig
   if (!USDC_MINT) {
     return (
-      <div className="rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-300">
+      <div className="vision-glass rounded-2xl p-4 text-red-300 border-red-500/30">
         Missing <code className="font-mono">NEXT_PUBLIC_USDC_MINT</code> env.
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 vision-perspective">
       {err && (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+        <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
           {err}
         </div>
       )}
 
-      {/* Deposit card */}
-      <div className="rounded-2xl border border-white/10 bg-black/20 backdrop-blur-xl p-6 text-white shadow-2xl hover:border-[rgb(182,255,62)]/30 transition-all duration-300">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-3 h-3 rounded-full bg-[rgb(182,255,62)]" />
-            <h3 className="text-lg font-semibold text-white">Deposits</h3>
-          </div>
-          <button
-            onClick={() => void manualRefresh()}
-            disabled={loading || !walletAddress}
-            className="border border-[rgb(182,255,62)]/20 bg-[rgb(182,255,62)]/10 px-3 py-1.5 text-xs text-[rgb(182,255,62)] hover:bg-[rgb(182,255,62)]/20 disabled:opacity-60 transition-all duration-200 font-medium rounded-full mb-4"
-          >
-            {loading ? "Refreshing…" : "Refresh"}
-          </button>
-        </div>
+      <div className="relative group">
+        {/* Background glow effect */}
+        <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-        <div className="flex items-center justify-between mb-1">
-          <div>
-            {/* Balance: "$2.00" + tiny "cad" to the right */}
-            <div className="text-3xl font-bold text-white mb-1 flex items-baseline gap-1">
+        {/* Main glass window container */}
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+          {/* Subtle inner glow */}
+          <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
+
+          {/* Header section with status indicator */}
+          <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
+            <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+              <div className="relative flex-shrink-0">
+                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] shadow-[0_0_20px_rgba(182,255,62,0.6)] animate-pulse" />
+                <div className="absolute inset-0 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] animate-ping opacity-20" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight truncate">
+                  Account Balance
+                </h3>
+                <p className="text-xs sm:text-sm text-white/60 mt-1">
+                  Available Funds
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => void manualRefresh()}
+              disabled={loading || !walletAddress}
+              className="vision-button px-3 py-2 sm:px-6 sm:py-3 text-xs sm:text-sm text-[rgb(182,255,62)] disabled:opacity-60 font-medium rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm flex-shrink-0"
+            >
               {loading ? (
-                <span>...</span>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 sm:w-4 sm:h-4 border-2 border-[rgb(182,255,62)]/30 border-t-[rgb(182,255,62)] rounded-full animate-spin" />
+                  <span className="hidden sm:inline">Refreshing…</span>
+                  <span className="sm:hidden">…</span>
+                </div>
               ) : (
-                <>
-                  <span>{formatFiatNarrow(fiatValue, displayCurrency)}</span>
-                  <span className="text-[10px] leading-5 text-zinc-400">
-                    {displayCurrency.toLowerCase()}
-                  </span>
-                </>
+                "Refresh"
               )}
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-3 sm:mb-6">
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-col gap-3">
+                {/* Balance and mobile account number row */}
+                <div className="flex items-baseline justify-between gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-1 min-w-0">
+                    {loading ? (
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
+                        <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
+                          {formatFiatNarrow(fiatValue, displayCurrency)}
+                        </span>
+                        <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end sm:pb-1 lg:pb-2">
+                          {displayCurrency.toLowerCase()}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Mobile account number - only visible on small screens */}
+                  <div className="sm:hidden flex-shrink-0">
+                    <button
+                      onClick={copyAccountNumber}
+                      className="group vision-button px-2 py-1 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm"
+                      disabled={!walletAddress}
+                      title={walletAddress || undefined}
+                    >
+                      <div className="text-xs font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
+                        {maskMobile(walletAddress)}
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Desktop account number - only visible on larger screens */}
+            <div className="hidden sm:block flex-shrink-0">
+              <button
+                onClick={copyAccountNumber}
+                className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm"
+                disabled={!walletAddress}
+                title={walletAddress || undefined}
+              >
+                <div className="text-right">
+                  <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
+                    {mask(walletAddress)}
+                  </div>
+                  <div className="text-xs text-white/40 opacity-0 group-hover:opacity-100 transition-all duration-200 mt-1">
+                    Click to copy account number
+                  </div>
+                </div>
+              </button>
             </div>
           </div>
 
-          <button
-            onClick={copyAccountNumber}
-            className="text-sm text-zinc-400 hover:text-[rgb(182,255,62)] transition-colors font-mono group cursor-pointer text-right"
-            disabled={!walletAddress}
-            title={walletAddress || undefined}
-          >
-            <span className="group-hover:text-[rgb(182,255,62)]">
-              {mask(walletAddress)}
-            </span>
-            <div className="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-1">
-              (Click to copy)
+          <div className="pt-4 sm:pt-6 border-t border-white/10">
+            <div className="grid grid-cols-3 gap-3 sm:gap-4">
+              <ActionButton
+                label="Deposit"
+                icon={<Download size={16} aria-hidden />}
+                onClick={openDepositModal}
+                disabled={disabled}
+              />
+              <ActionButton
+                label="Withdraw"
+                icon={<Upload size={16} aria-hidden />}
+                onClick={openWithdrawModal}
+                disabled={disabled}
+              />
+              <ActionButton
+                label="Transfer"
+                icon={<ArrowRightLeft size={16} aria-hidden />}
+                onClick={openTransferModal}
+                disabled={disabled}
+              />
             </div>
-          </button>
-        </div>
-
-        {/* Quick actions */}
-        <div className="mt-6 pt-4 border-t border-white/10">
-          <div className="grid grid-cols-3 gap-2 text-xs">
-            <ActionButton
-              label="Deposit"
-              icon={<Download size={12} aria-hidden />}
-              onClick={openDepositModal}
-              disabled={disabled}
-            />
-            <ActionButton
-              label="Withdraw"
-              icon={<Upload size={12} aria-hidden />}
-              onClick={openWithdrawModal}
-              disabled={disabled}
-            />
-            <ActionButton
-              label="Transfer"
-              icon={<ArrowRightLeft size={12} aria-hidden />}
-              onClick={openTransferModal}
-              disabled={disabled}
-            />
           </div>
         </div>
       </div>
@@ -491,12 +551,21 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="group flex flex-1 items-center justify-center gap-2 border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/85 transition-all hover:border-[rgb(182,255,62)]/30 hover:bg-[rgb(182,255,62)]/10 disabled:opacity-50 rounded-full hover:shadow-xs shadow-[rgb(182,255,62)]"
+      className="group relative overflow-hidden vision-button flex flex-col items-center justify-center gap-2 sm:gap-3 px-2 py-4 sm:px-3 sm:py-4 text-white/90 disabled:opacity-50 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-[1.02] active:scale-[0.98] hover:shadow-[0_8px_32px_rgba(182,255,62,0.15)]"
     >
-      <span className="flex h-4 w-4 items-center justify-center rounded-full bg-black/30">
+      {/* Enhanced shimmer effect on hover */}
+      <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+
+      {/* Subtle glow effect */}
+      <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[rgb(182,255,62)]/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+
+      <div className="hidden sm:flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 group-hover:bg-[rgb(182,255,62)]/20 group-hover:shadow-[0_0_20px_rgba(182,255,62,0.3)] transition-all duration-300 relative z-10">
         {icon}
+      </div>
+
+      <span className="text-sm sm:text-sm font-semibold tracking-wide relative z-10">
+        {label}
       </span>
-      <span className="text-xs md:text-md lg:text-md">{label}</span>
     </button>
   );
 }
@@ -520,26 +589,26 @@ function DepositModal({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999]"
+      className="fixed inset-0 z-[9999] vision-perspective"
       role="dialog"
       aria-modal="true"
       aria-labelledby="deposit-modal-title"
     >
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-xl backdrop-saturate-150"
+        className="absolute inset-0 bg-black/80 backdrop-blur-2xl backdrop-saturate-150"
         onClick={onClose}
         aria-hidden
       />
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.10),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.08),transparent)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
       </div>
-      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 overflow-y-auto overscroll-contain">
-        <div className="pointer-events-auto w-full max-w-3xl rounded-2xl border border-white/10 bg-zinc-900/95 shadow-2xl flex max-h-[90vh] flex-col overflow-hidden">
+      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 sm:p-6 overflow-y-auto overscroll-contain">
+        <div className="pointer-events-auto w-full max-w-4xl vision-window vision-depth flex max-h-[90vh] flex-col overflow-hidden">
           <h2 id="deposit-modal-title" className="sr-only">
             Deposit funds
           </h2>
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 shrink-0">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 sm:px-6 py-4 shrink-0">
+            <div className="flex items-center gap-2">
               <Tab
                 active={tab === "bank"}
                 onClick={() => setTab("bank")}
@@ -552,14 +621,14 @@ function DepositModal({ onClose }: { onClose: () => void }) {
               />
             </div>
             <button
-              className="rounded-lg border border-white/10 bg:white/5 bg-white/5 p-1.5 hover:bg-white/10 transition"
+              className="vision-button rounded-xl p-2 hover:bg-white/10 transition-all"
               onClick={onClose}
               aria-label="Close"
             >
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
             {tab === "bank" ? (
               <Buy />
             ) : (
@@ -600,26 +669,26 @@ function WithdrawModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999]"
+      className="fixed inset-0 z-[9999] vision-perspective"
       role="dialog"
       aria-modal="true"
       aria-labelledby="withdraw-modal-title"
     >
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-xl backdrop-saturate-150"
+        className="absolute inset-0 bg-black/80 backdrop-blur-2xl backdrop-saturate-150"
         onClick={onClose}
         aria-hidden
       />
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.10),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.08),transparent)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
       </div>
-      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 overflow-y-auto overscroll-contain">
-        <div className="pointer-events-auto w-full max-w-3xl rounded-2xl border border-white/10 bg-zinc-900/95 shadow-2xl flex max-h-[90vh] flex-col overflow-hidden">
+      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 sm:p-6 overflow-y-auto overscroll-contain">
+        <div className="pointer-events-auto w-full max-w-4xl vision-window vision-depth flex max-h-[90vh] flex-col overflow-hidden">
           <h2 id="withdraw-modal-title" className="sr-only">
             Withdraw funds
           </h2>
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 shrink-0">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 sm:px-6 py-4 shrink-0">
+            <div className="flex items-center gap-2">
               <Tab
                 active={tab === "bank"}
                 onClick={() => setTab("bank")}
@@ -632,14 +701,14 @@ function WithdrawModal({
               />
             </div>
             <button
-              className="rounded-lg border border-white/10 bg-white/5 p-1.5 hover:bg-white/10 transition"
+              className="vision-button rounded-xl p-2 hover:bg-white/10 transition-all"
               onClick={onClose}
               aria-label="Close"
             >
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
             {tab === "bank" ? (
               <Sell />
             ) : !valid ? (
@@ -669,11 +738,9 @@ function TransferModal({
   onClose: () => void;
   transfer?: TransferConfig;
 }) {
+  const [tab, setTab] = useState<"send" | "unclaimed">("send");
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
-
-  type TransferTab = "send" | "unclaimed";
-  const [tab, setTab] = useState<TransferTab>("send");
 
   const keyValid = useMemo(() => {
     if (!transfer?.depositOwner) return true;
@@ -689,26 +756,26 @@ function TransferModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[9999]"
+      className="fixed inset-0 z-[9999] vision-perspective"
       role="dialog"
       aria-modal="true"
       aria-labelledby="transfer-modal-title"
     >
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-xl backdrop-saturate-150"
+        className="absolute inset-0 bg-black/80 backdrop-blur-2xl backdrop-saturate-150"
         onClick={onClose}
         aria-hidden
       />
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.10),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.08),transparent)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
       </div>
-      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 overflow-y-auto overscroll-contain">
-        <div className="pointer-events-auto w-full max-w-3xl rounded-2xl border border-white/10 bg-zinc-900/95 shadow-2xl flex max-h-[90vh] flex-col overflow-hidden">
+      <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 sm:p-6 overflow-y-auto overscroll-contain">
+        <div className="pointer-events-auto w-full max-w-4xl vision-window vision-depth flex max-h-[90vh] flex-col overflow-hidden">
           <h2 id="transfer-modal-title" className="sr-only">
             Transfer
           </h2>
-          <div className="flex items-center justify-between border-b border-white/10 px-4 py-3 shrink-0">
-            <div className="flex items-center gap-1">
+          <div className="flex items-center justify-between border-b border-white/10 px-4 sm:px-6 py-4 shrink-0">
+            <div className="flex items-center gap-2">
               <Tab
                 active={tab === "send"}
                 onClick={() => setTab("send")}
@@ -721,14 +788,14 @@ function TransferModal({
               />
             </div>
             <button
-              className="rounded-lg border border-white/10 bg-white/5 p-1.5 hover:bg-white/10 transition"
+              className="vision-button rounded-xl p-2 hover:bg-white/10 transition-all"
               onClick={onClose}
               aria-label="Close"
             >
-              <X size={16} />
+              <X size={18} />
             </button>
           </div>
-          <div className="flex-1 overflow-y-auto p-4 md:p-6">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8">
             {tab === "send" ? (
               !keyValid ? (
                 <div className="text-xs text-red-400">
@@ -772,10 +839,10 @@ function Tab({
   return (
     <button
       onClick={onClick}
-      className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium transition border ${
+      className={`inline-flex items-center gap-2 rounded-xl px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium transition-all duration-200 ${
         active
-          ? "border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/15 text-[rgb(182,255,62)]"
-          : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+          ? "vision-button border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/15 text-[rgb(182,255,62)] shadow-lg"
+          : "vision-button text-white/70 hover:bg-white/10 hover:text-white"
       }`}
     >
       {label}

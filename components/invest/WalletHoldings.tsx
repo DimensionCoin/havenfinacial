@@ -1,7 +1,7 @@
 // components/wallet/WalletHoldings.tsx
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { RefreshCw, ChevronDown } from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -306,117 +306,188 @@ export default function WalletHoldings({
 
   return (
     <div
-      className={`rounded-2xl border border-white/10 bg-zinc-900/70 backdrop-blur-xl shadow-2xl ${className}`}
+      className={`relative rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] overflow-hidden ${className}`}
     >
+      <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-black/20 pointer-events-none" />
+
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div className="relative flex items-center justify-between px-6 py-4 border-b border-white/10 bg-gradient-to-r from-white/5 to-transparent">
         <div className="min-w-0">
-          <div className="text-white font-semibold leading-tight">
-            Investments
+          <div className="text-white font-bold text-lg leading-tight tracking-tight">
+            Portfolio
           </div>
-          <div className="text-[11px] text-zinc-400 leading-tight">
+          <div className="text-sm text-white/60 leading-tight mt-1">
             Total value:{" "}
-            <span className="text-white/90 font-medium">
+            <span className="text-white font-semibold">
               {fmtMoney(totalLocal, currency)}
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <span className="hidden sm:inline text-[10px] text-zinc-500">
+        <div className="flex items-center gap-3">
+          <span className="hidden sm:inline text-xs text-white/60 bg-white/5 px-3 py-1.5 rounded-full border border-white/10">
             Updated {lastUpdated}
           </span>
           <button
             type="button"
             disabled={loading}
             onClick={onRefreshClick}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/10 text-white/80 disabled:opacity-50"
+            className="inline-flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl border border-white/20 bg-white/5 hover:bg-white/10 text-white backdrop-blur-sm disabled:opacity-50 transition-all duration-200 shadow-lg hover:shadow-xl"
             title="Refresh"
           >
-            <RefreshCw
-              className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`}
-            />
-            Refresh
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Refresh</span>
           </button>
           <button
             type="button"
             aria-expanded={!collapsed}
             onClick={() => setCollapsed((c) => !c)}
-            className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-lg border border-white/10 hover:bg-white/10 text-white/80"
+            className="inline-flex items-center gap-2 text-sm px-4 py-2.5 rounded-xl border border-white/20 bg-white/5 hover:bg-white/10 text-white backdrop-blur-sm transition-all duration-200 shadow-lg hover:shadow-xl"
             title={collapsed ? "Expand" : "Collapse"}
           >
             <ChevronDown
-              className={`h-3.5 w-3.5 transition-transform duration-200 ${
+              className={`h-4 w-4 transition-transform duration-300 ${
                 collapsed ? "" : "rotate-180"
               }`}
             />
-            {collapsed ? "Show" : "Hide"}
+            <span className="hidden sm:inline">
+              {collapsed ? "Show" : "Hide"}
+            </span>
           </button>
         </div>
       </div>
 
       {/* Body (collapsible) */}
       {!collapsed && (
-        <div className="p-4">
+        <div className="relative p-6">
           {!owner58 ? (
-            <div className="text-sm text-zinc-400">
-              Your investment account isn’t ready yet. Please finish onboarding.
+            <div className="text-center py-12">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-white/10" />
+              </div>
+              <div className="text-white font-medium mb-2">
+                Wallet Not Ready
+              </div>
+              <div className="text-sm text-white/60 max-w-sm mx-auto">
+                Your investment account isn&#39;t ready yet. Please finish
+                onboarding to view your portfolio.
+              </div>
             </div>
           ) : error ? (
-            <div className="text-sm text-red-400">
-              Couldn’t load your investments. Please try again.
+            <div className="text-center py-12">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-red-500/10 border border-red-500/20 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-red-500/20" />
+              </div>
+              <div className="text-red-300 font-medium mb-2">
+                Connection Error
+              </div>
+              <div className="text-sm text-red-400/80 max-w-sm mx-auto">
+                Couldn&#39;t load your investments. Please check your connection and
+                try again.
+              </div>
             </div>
           ) : rows.length === 0 && !loading ? (
-            <div className="text-sm text-zinc-400">No assets above $0.01.</div>
-          ) : (
-            <ul className={`grid ${grid} gap-3`}>
-              {rows.map((r) => (
-                <li
-                  key={`${r.token.symbol}-${getMintFor(r.token, cluster)}`}
-                  className="rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur p-3 flex items-center gap-3"
-                >
-                  <Image
-                    src={r.token.logo || "/logos/default.png"}
-                    alt={`${r.token.name} logo`}
-                    width={36}
-                    height={36}
-                    className="h-9 w-9 rounded-full border border-white/10 object-contain bg-zinc-800"
+            <div className="text-center py-12">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+                <div className="w-8 h-8 rounded-full bg-white/10" />
+              </div>
+              <div className="text-white font-medium mb-2">No Assets Found</div>
+              <div className="text-sm text-white/60 max-w-sm mx-auto mb-4">
+                No assets above $0.01 found in your wallet. Start investing to
+                see your portfolio here.
+              </div>
+              <button
+                type="button"
+                onClick={onRefreshClick}
+                className="group relative overflow-hidden rounded-2xl bg-[rgb(182,255,62)] text-black px-6 py-3 font-bold text-sm hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] hover:shadow-[0_12px_48px_rgba(182,255,62,0.4)] transform hover:scale-[1.02] active:scale-[0.98]"
+              >
+                {/* Button shimmer effect */}
+                <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                <div className="relative flex items-center justify-center gap-2">
+                  <RefreshCw
+                    className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
                   />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="text-white font-medium truncate">
-                          {r.token.name}{" "}
-                          <span className="text-xs text-zinc-400">
-                            ({r.token.symbol})
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-zinc-500">
-                          Qty{" "}
-                          {r.amount.toLocaleString(undefined, {
-                            maximumFractionDigits: r.amount < 1 ? 6 : 4,
-                          })}
-                        </div>
+                  <span>Refresh Portfolio</span>
+                </div>
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className={`grid ${grid} gap-4`}>
+                {rows.map((r) => (
+                  <div
+                    key={`${r.token.symbol}-${getMintFor(r.token, cluster)}`}
+                    className="group relative rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-4 hover:border-white/20 hover:bg-white/10 transition-all duration-300 shadow-lg hover:shadow-xl"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="relative">
+                        <Image
+                          src={r.token.logo || "/logos/default.png"}
+                          alt={`${r.token.name} logo`}
+                          width={48}
+                          height={48}
+                          className="h-12 w-12 rounded-full border-2 border-white/20 object-contain bg-white/5 shadow-lg"
+                        />
+                        <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-[rgb(182,255,62)] border-2 border-black/40 shadow-sm" />
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <div className="text-white/90 font-semibold">
-                          {fmtMoney(r.valueUsd * fxRate, currency)}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-white font-semibold text-base leading-tight truncate">
+                              {r.token.name}
+                            </div>
+                            <div className="text-sm text-white/60 leading-tight">
+                              {r.token.symbol} •{" "}
+                              {r.amount.toLocaleString(undefined, {
+                                maximumFractionDigits: r.amount < 1 ? 6 : 4,
+                              })}
+                            </div>
+                          </div>
+
+                          <div className="text-right flex-shrink-0">
+                            <div className="text-white font-bold text-lg leading-tight">
+                              {fmtMoney(r.valueUsd * fxRate, currency)}
+                            </div>
+                            <div className="text-sm text-white/60 leading-tight">
+                              {fmtMoney(r.priceUsd * fxRate, currency)} each
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-[11px] text-zinc-500">
-                          {fmtMoney(r.priceUsd * fxRate, currency)}
-                          <span className="opacity-70"> • each</span>
+
+                        <div className="mt-3 h-1 bg-white/10 rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-[rgb(182,255,62)] to-[rgb(182,255,62)]/80 rounded-full transition-all duration-1000"
+                            style={{
+                              width: `${Math.min(
+                                (r.valueUsd /
+                                  Math.max(
+                                    ...rows.map((row) => row.valueUsd)
+                                  )) *
+                                  100,
+                                100
+                              )}%`,
+                            }}
+                          />
                         </div>
                       </div>
                     </div>
                   </div>
-                </li>
-              ))}
-              {loading && (
-                <li className="rounded-xl border border-white/10 bg-zinc-900/70 backdrop-blur p-3 text-sm text-white/60">
-                  Updating…
-                </li>
-              )}
-            </ul>
+                ))}
+
+                {loading && (
+                  <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-4">
+                    <div className="flex items-center gap-4">
+                      <div className="h-12 w-12 rounded-full bg-white/10 animate-pulse" />
+                      <div className="flex-1 space-y-2">
+                        <div className="h-4 bg-white/10 rounded animate-pulse" />
+                        <div className="h-3 bg-white/5 rounded animate-pulse w-2/3" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           )}
         </div>
       )}

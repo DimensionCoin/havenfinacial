@@ -1,7 +1,7 @@
 // components/notifications/NotificationBell.tsx
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bell } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
@@ -32,10 +32,7 @@ function timeAgo(iso?: string) {
   return `${Math.floor(hr / 24)}d`;
 }
 
-async function fetchAll(
-  limit = 50,
-  extraHeaders: HeadersInit = {}
-): Promise<NotificationItem[]> {
+async function fetchAll(limit = 50, extraHeaders: HeadersInit = {}) {
   const res = await fetch(`/api/notifications?limit=${limit}`, {
     method: "GET",
     credentials: "include",
@@ -85,11 +82,15 @@ export default function NotificationBell({
   const [fxLoading, setFxLoading] = useState(false);
 
   const [open, setOpen] = useState(false);
-  const [mounted, setMounted] = useState(false); // for portal
+  const [mounted, setMounted] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [marking, setMarking] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
+
+  // Name resolution caches
+  const nameCacheRef = useRef<Map<string, string | null>>(new Map());
+  const pendingRef = useRef<Set<string>>(new Set()); // in-flight lookups
 
   useEffect(() => setMounted(true), []);
 
@@ -133,7 +134,7 @@ export default function NotificationBell({
     return () => clearInterval(id);
   }, [pollMs, ready, authenticated, load]);
 
-  // Mark read when the modal opens
+  // Mark read when opened
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -193,7 +194,7 @@ export default function NotificationBell({
     };
   }, [ready, authenticated, targetCurrency, getAccessToken]);
 
-  // Body scroll lock + Escape to close when modal is open
+  // Body scroll lock + Escape
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -224,23 +225,131 @@ export default function NotificationBell({
     [targetCurrency]
   );
 
+  const shortAddr = (a?: unknown) => {
+    const s = typeof a === "string" ? a : null;
+    if (!s || s.length < 8) return null;
+    return `${s.slice(0, 4)}…${s.slice(-4)}`;
+  };
+
+  // On-the-fly address -> user name
+  const resolveSenderName = useCallback(
+    async (owner58: string): Promise<string | null> => {
+      const cached = nameCacheRef.current.get(owner58);
+      if (cached !== undefined) return cached;
+
+      if (pendingRef.current.has(owner58)) return null;
+      pendingRef.current.add(owner58);
+
+      try {
+        const headers = await getAuthHeaders();
+        const r = await fetch(
+          `/api/address/resolve?owner58=${encodeURIComponent(owner58)}`,
+          {
+            credentials: "include",
+            cache: "no-store",
+            headers,
+          }
+        );
+        const j = await r.json().catch(() => null);
+        const name =
+          r.ok && j?.ok
+            ? (j.name as string | null) ?? (j.email as string | null) ?? null
+            : null;
+
+        nameCacheRef.current.set(owner58, name);
+        return name;
+      } catch {
+        nameCacheRef.current.set(owner58, null);
+        return null;
+      } finally {
+        pendingRef.current.delete(owner58);
+      }
+    },
+    [getAuthHeaders]
+  );
+
+  // Kick off resolves for any transfers with an address but no fromName
+  useEffect(() => {
+    const addresses = new Set<string>();
+    for (const it of items) {
+      const t = (it.type || "").toLowerCase();
+      if (t !== "transfer_received" && t !== "money_received") continue;
+
+      const data = it.data || {};
+      const hasName = typeof data.fromName === "string" && !!data.fromName;
+      const addr =
+        typeof data.fromOwner58 === "string" ? data.fromOwner58.trim() : null;
+      if (!addr) continue;
+
+      // queue resolves if we don't already have a cached value
+      if (!hasName && !nameCacheRef.current.has(addr)) addresses.add(addr);
+    }
+    if (addresses.size === 0) return;
+
+    addresses.forEach(async (addr) => {
+      const name = await resolveSenderName(addr);
+      if (!name) return;
+
+      // Write-through so this render shows the friendly label immediately
+      setItems((prev) =>
+        prev.map((it) => {
+          const t = (it.type || "").toLowerCase();
+          if (t !== "transfer_received" && t !== "money_received") return it;
+          const data = it.data || {};
+          const itsAddr =
+            typeof data.fromOwner58 === "string"
+              ? data.fromOwner58.trim()
+              : null;
+          const itsName =
+            typeof data.fromName === "string" ? data.fromName : null;
+
+          if (itsAddr === addr && !itsName) {
+            return { ...it, data: { ...data, fromName: name } };
+          }
+          return it;
+        })
+      );
+    });
+  }, [items, resolveSenderName]);
+
+  // Render message; prefer cache if fromName is absent
   const renderMessage = useCallback(
     (n: NotificationItem) => {
       const t = (n.type || "").toLowerCase();
+
       if (t === "transfer_received" || t === "money_received") {
-        const raw = (n.data?.amountUi as unknown) ?? null;
+        const rawAmt = (n.data?.amountUi as unknown) ?? null;
         const amountUi =
-          typeof raw === "string" ? Number(raw) : (raw as number | null);
-        if (amountUi != null && isFinite(Number(amountUi))) {
-          const local = Number(amountUi) * fxRate;
-          const from =
-            typeof n.data?.from === "string" && n.data.from
-              ? ` from ${n.data.from}`
-              : "";
-          return `You received ${fmtCurrency(local)}${from}.`;
-        }
+          typeof rawAmt === "string"
+            ? Number(rawAmt)
+            : (rawAmt as number | null);
+        const amountLocal =
+          amountUi != null && isFinite(Number(amountUi))
+            ? fmtCurrency(Number(amountUi) * fxRate)
+            : null;
+
+        const addr =
+          typeof n.data?.fromOwner58 === "string"
+            ? n.data.fromOwner58.trim()
+            : null;
+        const fromName =
+          (typeof n.data?.fromName === "string" && n.data.fromName) || null;
+
+        // Use resolved cache if server payload didn't include a name
+        const resolved = addr ? nameCacheRef.current.get(addr) : null;
+        const label = fromName || resolved || shortAddr(addr) || "a sender";
+
+        return {
+          line1: amountLocal
+            ? `You received ${amountLocal}.`
+            : `You received a transfer.`,
+          from: `From ${label}${
+            addr && pendingRef.current.has(addr) ? " (resolving…)" : ""
+          }`,
+        };
       }
-      return n.message;
+
+      return { line1: n.message, from: null as string | null };
     },
     [fxRate, fmtCurrency]
   );
@@ -264,7 +373,6 @@ export default function NotificationBell({
         )}
       </button>
 
-      {/* Centered, full-screen overlay via portal */}
       {mounted &&
         open &&
         createPortal(
@@ -273,18 +381,14 @@ export default function NotificationBell({
             role="dialog"
             className="fixed inset-0 z-[9999] flex items-center justify-center"
           >
-            {/* Backdrop */}
             <div
               className="absolute inset-0 bg-black/60 backdrop-blur-sm"
               onClick={() => setOpen(false)}
             />
-
-            {/* Dialog */}
             <div
               className="relative w-full max-w-lg sm:max-w-xl lg:max-w-2xl mx-4 sm:mx-6 rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
-              onClick={(e) => e.stopPropagation()} // prevent closing when clicking inside
+              onClick={(e) => e.stopPropagation()}
             >
-              {/* Header */}
               <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/95">
                 <span className="text-sm font-semibold text-white/90">
                   Notifications
@@ -306,7 +410,6 @@ export default function NotificationBell({
                 </div>
               </div>
 
-              {/* Content */}
               <div className="max-h-[85vh] overflow-auto">
                 {!authenticated ? (
                   <div className="px-4 py-6 text-sm text-white/60">
@@ -322,33 +425,47 @@ export default function NotificationBell({
                   </div>
                 ) : (
                   <ul className="divide-y divide-white/10">
-                    {items.map((n) => (
-                      <li
-                        key={n._id}
-                        className={`px-4 py-3 text-sm ${
-                          n.seen ? "bg-transparent" : "bg-[rgb(182,255,62)]/5"
-                        }`}
-                      >
-                        <div className="flex items-start gap-2">
-                          <span
-                            className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
-                              n.seen ? "bg-zinc-500/40" : "bg-[rgb(182,255,62)]"
-                            }`}
-                          />
-                          <div className="min-w-0">
-                            <p className="text-white/90 break-words">
-                              {renderMessage(n)}
-                            </p>
-                            <div className="mt-1 text-[11px] text-white/45">
-                              {timeAgo(n.createdAt)} ago
-                              {fxLoading && targetCurrency !== "USD"
-                                ? " · updating rates…"
-                                : null}
+                    {items.map((n) => {
+                      const content = renderMessage(n);
+                      const isTransfer =
+                        (n.type || "").toLowerCase() === "transfer_received" ||
+                        (n.type || "").toLowerCase() === "money_received";
+
+                      return (
+                        <li
+                          key={n._id}
+                          className={`px-4 py-3 text-sm ${
+                            n.seen ? "bg-transparent" : "bg-[rgb(182,255,62)]/5"
+                          }`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
+                                n.seen
+                                  ? "bg-zinc-500/40"
+                                  : "bg-[rgb(182,255,62)]"
+                              }`}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-white/90 break-words">
+                                {content.line1}
+                              </p>
+                              {isTransfer && content.from && (
+                                <p className="mt-0.5 text-[12px] text-white/70">
+                                  {content.from}
+                                </p>
+                              )}
+                              <div className="mt-1 text-[11px] text-white/45">
+                                {timeAgo(n.createdAt)} ago
+                                {fxLoading && targetCurrency !== "USD"
+                                  ? " · updating rates…"
+                                  : null}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </li>
-                    ))}
+                        </li>
+                      );
+                    })}
                     {loading && (
                       <li className="px-4 py-3 text-sm text-white/60">
                         Loading…
