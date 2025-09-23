@@ -1,7 +1,8 @@
 // components/notifications/NotificationBell.tsx
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Bell } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
@@ -75,25 +76,25 @@ export default function NotificationBell({
   const { user } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
 
-  // Target currency from user (USDC ≈ USD)
   const targetCurrency =
     (user?.displayCurrency || "USD").toUpperCase() === "USDC"
       ? "USD"
       : (user?.displayCurrency || "USD").toUpperCase();
 
-  const [fxRate, setFxRate] = useState<number>(1); // USD -> targetCurrency
+  const [fxRate, setFxRate] = useState<number>(1);
   const [fxLoading, setFxLoading] = useState(false);
 
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false); // for portal
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [marking, setMarking] = useState(false);
   const [lastError, setLastError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => setMounted(true), []);
 
   const unseen = items.reduce((n, it) => (it.seen ? n : n + 1), 0);
 
-  // Build Authorization header when possible (fallback to cookies-only)
   const getAuthHeaders = useCallback(async (): Promise<HeadersInit> => {
     if (!ready || !authenticated) return {};
     try {
@@ -104,7 +105,6 @@ export default function NotificationBell({
     }
   }, [ready, authenticated, getAccessToken]);
 
-  // Load notifications
   const load = useCallback(async () => {
     setLoading(true);
     setLastError(null);
@@ -121,13 +121,11 @@ export default function NotificationBell({
     }
   }, [limit, getAuthHeaders]);
 
-  // Initial fetch when Privy ready
   useEffect(() => {
     if (!ready) return;
     void load();
   }, [ready, load]);
 
-  // Optional polling
   useEffect(() => {
     if (!pollMs || pollMs <= 0) return;
     if (!ready || !authenticated) return;
@@ -135,18 +133,7 @@ export default function NotificationBell({
     return () => clearInterval(id);
   }, [pollMs, ready, authenticated, load]);
 
-  // Click outside to close
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  // Mark read when opened
+  // Mark read when the modal opens
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
@@ -171,12 +158,11 @@ export default function NotificationBell({
     };
   }, [open, items, getAuthHeaders]);
 
-  // Fetch USD->targetCurrency rate once (or when currency changes)
+  // FX load
   useEffect(() => {
     let cancelled = false;
-
     async function loadFx() {
-      if (!ready || !authenticated) return; // needs bearer
+      if (!ready || !authenticated) return;
       if (targetCurrency === "USD") {
         setFxRate(1);
         return;
@@ -201,14 +187,27 @@ export default function NotificationBell({
         if (!cancelled) setFxLoading(false);
       }
     }
-
     void loadFx();
     return () => {
       cancelled = true;
     };
   }, [ready, authenticated, targetCurrency, getAccessToken]);
 
-  // Format currency with Intl (fallback to plain)
+  // Body scroll lock + Escape to close when modal is open
+  useEffect(() => {
+    if (!open) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   const fmtCurrency = useCallback(
     (v: number | null | undefined) => {
       if (v == null || !isFinite(Number(v))) return "—";
@@ -225,17 +224,15 @@ export default function NotificationBell({
     [targetCurrency]
   );
 
-  // Render a nice message per type, converting amountUi to user's currency
   const renderMessage = useCallback(
     (n: NotificationItem) => {
       const t = (n.type || "").toLowerCase();
-
       if (t === "transfer_received" || t === "money_received") {
         const raw = (n.data?.amountUi as unknown) ?? null;
         const amountUi =
           typeof raw === "string" ? Number(raw) : (raw as number | null);
         if (amountUi != null && isFinite(Number(amountUi))) {
-          const local = Number(amountUi) * fxRate; // USD -> user's currency
+          const local = Number(amountUi) * fxRate;
           const from =
             typeof n.data?.from === "string" && n.data.from
               ? ` from ${n.data.from}`
@@ -243,19 +240,17 @@ export default function NotificationBell({
           return `You received ${fmtCurrency(local)}${from}.`;
         }
       }
-
-      // default: show the message as-is
       return n.message;
     },
     [fxRate, fmtCurrency]
   );
 
   return (
-    <div ref={containerRef} className={`relative ${className}`}>
+    <div className={className}>
       <button
         type="button"
         aria-label="Notifications"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpen(true)}
         className="relative inline-flex items-center justify-center rounded-full p-2 hover:bg-white/10 transition-colors"
       >
         <Bell className="h-5 w-5 text-white/90" aria-hidden />
@@ -269,86 +264,103 @@ export default function NotificationBell({
         )}
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          aria-label="Notifications"
-          // Mobile: fixed panel that fits viewport; sm+: revert to anchored dropdown
-          className={[
-            // mobile-first (xs): fixed, full-width with 8px margins, placed below header
-            "fixed left-2 right-2 top-[56px]", // ~ 56px from top; tweak if your header is taller
-            "max-h-[calc(100vh-96px)]", // leaves room below so it never clips
-            "w-auto",
+      {/* Centered, full-screen overlay via portal */}
+      {mounted &&
+        open &&
+        createPortal(
+          <div
+            aria-modal="true"
+            role="dialog"
+            className="fixed inset-0 z-[9999] flex items-center justify-center"
+          >
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setOpen(false)}
+            />
 
-            // shared styling
-            "z-[100] overflow-auto rounded-xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl",
-
-            // sm and up: behave like the old dropdown
-            "sm:absolute sm:right-0 sm:top-auto sm:mt-2",
-            "sm:w-[360px] sm:max-h-[70vh]",
-          ].join(" ")}
-        >
-          <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-2 border-b border-white/10 bg-zinc-900/95">
-            <span className="text-xs font-semibold text-white/80">
-              Notifications
-            </span>
-            <button
-              onClick={() => void load()}
-              className="text-[11px] px-2 py-1 rounded-md border border-white/10 hover:bg-white/10 text-white/70"
-              disabled={loading || marking}
+            {/* Dialog */}
+            <div
+              className="relative w-full max-w-lg sm:max-w-xl lg:max-w-2xl mx-4 sm:mx-6 rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+              onClick={(e) => e.stopPropagation()} // prevent closing when clicking inside
             >
-              {loading ? "Refreshing…" : "Refresh"}
-            </button>
-          </div>
+              {/* Header */}
+              <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/95">
+                <span className="text-sm font-semibold text-white/90">
+                  Notifications
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void load()}
+                    className="text-[11px] px-2 py-1 rounded-md border border-white/10 hover:bg-white/10 text-white/70"
+                    disabled={loading || marking}
+                  >
+                    {loading ? "Refreshing…" : "Refresh"}
+                  </button>
+                  <button
+                    onClick={() => setOpen(false)}
+                    className="text-[11px] px-2 py-1 rounded-md border border-white/10 hover:bg-white/10 text-white/70"
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
 
-          {!authenticated ? (
-            <div className="px-4 py-6 text-sm text-white/60">
-              Please sign in to view notifications.
-            </div>
-          ) : lastError ? (
-            <div className="px-4 py-6 text-sm text-red-400 break-words">
-              Failed to load notifications.
-            </div>
-          ) : items.length === 0 && !loading ? (
-            <div className="px-4 py-6 text-sm text-white/60">
-              No notifications.
-            </div>
-          ) : (
-            <ul className="divide-y divide-white/10">
-              {items.map((n) => (
-                <li
-                  key={n._id}
-                  className={`px-4 py-3 text-sm ${
-                    n.seen ? "bg-transparent" : "bg-[rgb(182,255,62)]/5"
-                  }`}
-                >
-                  <div className="flex items-start gap-2">
-                    <span
-                      className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
-                        n.seen ? "bg-zinc-500/40" : "bg-[rgb(182,255,62)]"
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-white/90 break-words">
-                        {renderMessage(n)}
-                      </p>
-                      <div className="mt-1 text-[11px] text-white/45">
-                        {timeAgo(n.createdAt)} ago
-                        {fxLoading && targetCurrency !== "USD"
-                          ? " · updating rates…"
-                          : null}
-                      </div>
-                    </div>
+              {/* Content */}
+              <div className="max-h-[85vh] overflow-auto">
+                {!authenticated ? (
+                  <div className="px-4 py-6 text-sm text-white/60">
+                    Please sign in to view notifications.
                   </div>
-                </li>
-              ))}
-              {loading && (
-                <li className="px-4 py-3 text-sm text-white/60">Loading…</li>
-              )}
-            </ul>
-          )}
-        </div>
-      )}
+                ) : lastError ? (
+                  <div className="px-4 py-6 text-sm text-red-400 break-words">
+                    Failed to load notifications.
+                  </div>
+                ) : items.length === 0 && !loading ? (
+                  <div className="px-4 py-6 text-sm text-white/60">
+                    No notifications.
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-white/10">
+                    {items.map((n) => (
+                      <li
+                        key={n._id}
+                        className={`px-4 py-3 text-sm ${
+                          n.seen ? "bg-transparent" : "bg-[rgb(182,255,62)]/5"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span
+                            className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
+                              n.seen ? "bg-zinc-500/40" : "bg-[rgb(182,255,62)]"
+                            }`}
+                          />
+                          <div className="min-w-0">
+                            <p className="text-white/90 break-words">
+                              {renderMessage(n)}
+                            </p>
+                            <div className="mt-1 text-[11px] text-white/45">
+                              {timeAgo(n.createdAt)} ago
+                              {fxLoading && targetCurrency !== "USD"
+                                ? " · updating rates…"
+                                : null}
+                            </div>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                    {loading && (
+                      <li className="px-4 py-3 text-sm text-white/60">
+                        Loading…
+                      </li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
     </div>
   );
 }

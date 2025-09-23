@@ -7,7 +7,7 @@ export type TokenMeta = {
   name: string;
   symbol: string;
   id?: string;
-  logo: string;
+  logo: string; // points to /public
   category?: TokenCategory;
   decimals?: number;
   mints: Partial<Record<Cluster, string>>;
@@ -26,7 +26,7 @@ export const TOKENS: TokenMeta[] = [
     name: "Solana",
     symbol: "SOL",
     id: "sol",
-    logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png",
+    logo: "/logos/sol.png",
     category: "Top 3",
     decimals: 9,
     mints: {
@@ -38,7 +38,7 @@ export const TOKENS: TokenMeta[] = [
     name: "Bitcoin",
     symbol: "BTC",
     id: "btc",
-    logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh/logo.png",
+    logo: "/logos/btc.png",
     category: "Top 3",
     decimals: 8,
     mints: {
@@ -50,7 +50,7 @@ export const TOKENS: TokenMeta[] = [
     name: "Ethereum",
     symbol: "ETH",
     id: "eth",
-    logo: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png",
+    logo: "/logos/eth.png",
     category: "Top 3",
     decimals: 8,
     mints: {
@@ -62,36 +62,36 @@ export const TOKENS: TokenMeta[] = [
     name: "S&P500",
     symbol: "SPY",
     id: "spyx",
-    logo: "https://assets.coingecko.com/coins/images/66695/standard/Ticker_SPX__Company_Name_SP500__size_200x200_2x.png?1750266819",
+    logo: "/logos/spx.webp",
     category: "Stocks",
     decimals: 8,
     mints: {
       mainnet: "XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W",
-      // devnet: "<devnet-soBTC-mint>",
+      // devnet: "<devnet-SPY-mint>",
     },
   },
   {
     name: "Tesla",
     symbol: "TSLA",
     id: "tslax",
-    logo: "https://assets.coingecko.com/coins/images/55638/standard/Ticker_TSLA__Company_Name_Tesla_Inc.__size_200x200_2x.png?1746863299",
+    logo: "/logos/tsla.webp",
     category: "Stocks",
     decimals: 8,
     mints: {
       mainnet: "XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB",
-      // devnet: "<devnet-soBTC-mint>",
+      // devnet: "<devnet-TSLA-mint>",
     },
   },
   {
-    name: "Nividia",
+    name: "Nvidia",
     symbol: "NVDA",
     id: "nvdax",
-    logo: "https://assets.coingecko.com/coins/images/55633/standard/Ticker_NVDA__Company_Name_NVIDIA_Corp__size_200x200_2x.png?1746862704",
+    logo: "/logos/nvda.webp",
     category: "Stocks",
     decimals: 8,
     mints: {
       mainnet: "Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh",
-      // devnet: "<devnet-soBTC-mint>",
+      // devnet: "<devnet-NVDA-mint>",
     },
   },
 ];
