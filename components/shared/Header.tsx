@@ -88,7 +88,7 @@ export default function Header() {
       <header className="sticky top-0 z-40 w-full border-b border-border bg-background/40 backdrop-blur">
         <div className="mx-auto flex h-26 sm:h-16 items-center justify-between px-4 md:px-6 sm:mt-0">
           {/* left: logo + greeting */}
-          <div className="flex items-center gap-4 flex-shrink-0 mt-8 sm:mt-0">
+          <div className="flex items-center gap-4 flex-shrink-0 mt-9 sm:mt-0">
             <div className="flex items-center gap-3">
               <Link href={homeHref}>
                 <div className="flex gap-3">
@@ -139,7 +139,7 @@ export default function Header() {
             })}
           </nav>
 
-          <div className="flex items-center gap-3 mt-8 sm:mt-0">
+          <div className="flex items-center gap-3 mt-9 sm:mt-0">
             {isAuthed ? (
               <>
                 <NotificationBell />
