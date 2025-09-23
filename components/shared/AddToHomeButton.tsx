@@ -142,7 +142,7 @@ export default function AddToHomeButton({
                   <p className="text-sm text-zinc-300">
                     Scroll down and select{" "}
                     <span className="font-semibold text-white">
-                      "Add to Home Screen"
+                      &quot;Add to Home Screen&quot;
                     </span>
                   </p>
                 </div>
@@ -151,7 +151,7 @@ export default function AddToHomeButton({
                     3
                   </div>
                   <p className="text-sm text-zinc-300">
-                    Tap <span className="font-semibold text-white">"Add"</span>{" "}
+                    Tap <span className="font-semibold text-white">&quot;Add&quot;</span>{" "}
                     to install Haven Bank on your home screen
                   </p>
                 </div>
@@ -226,9 +226,7 @@ export default function AddToHomeButton({
                 </div>
                 <p className="text-sm text-zinc-300">
                   Scroll down and select{" "}
-                  <span className="font-semibold text-white">
-                    "Add to Home Screen"
-                  </span>
+                  <span className="font-semibold text-white">&quot;Add to Home Screen&quot;</span>
                 </p>
               </div>
               <div className="flex items-start gap-3">
@@ -236,7 +234,7 @@ export default function AddToHomeButton({
                   3
                 </div>
                 <p className="text-sm text-zinc-300">
-                  Tap <span className="font-semibold text-white">"Add"</span> to
+                  Tap <span className="font-semibold text-white">&quot;Add&quot;</span> to
                   install Haven Bank on your home screen
                 </p>
               </div>
