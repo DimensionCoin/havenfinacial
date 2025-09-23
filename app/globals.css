@@ -273,3 +273,13 @@
   background: rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(10px);
 }
+
+/* default web spacing */
+.pwa-toaster {
+  top: 16px !important; /* override library default reliably */
+}
+
+/* when installed PWA */
+html[data-standalone="true"] .pwa-toaster {
+  top: calc(env(safe-area-inset-top, 0px) + 28px) !important;
+}
