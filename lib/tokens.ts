@@ -166,6 +166,42 @@ export const TOKENS: TokenMeta[] = [
       // devnet: "<devnet-SPY-mint>",
     },
   },
+  {
+    name: "Bonk",
+    symbol: "BONK",
+    id: "bonk",
+    logo: "/logos/bonk.jpg",
+    category: "Meme",
+    decimals: 8,
+    mints: {
+      mainnet: "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Pump.fun",
+    symbol: "PUMP",
+    id: "pump",
+    logo: "/logos/pump.jpg",
+    category: "Meme",
+    decimals: 8,
+    mints: {
+      mainnet: "pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "DogWifHat",
+    symbol: "WIF",
+    id: "wif",
+    logo: "/logos/wif.jpg",
+    category: "Meme",
+    decimals: 8,
+    mints: {
+      mainnet: "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
 ];
 
 export const CRYPTO_FLAT_FEE_USDC_UI: number = (() => {

@@ -11,35 +11,34 @@ export default function Page() {
 
   return (
     <div className="min-h-screen">
-      {/* Simple Header with Tabs */}
       <header className="border-b border-white/10 bg-black/40 backdrop-blur-[40px]">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between h-16">
-            <h1 className="text-sm md:text-lg lg:text-xl font-bold text-white">Investment Center</h1>
+          <div className="flex items-center justify-between h-14">
+            <h1 className="text-sm lg:text-lg font-bold text-white">Investment Center</h1>
 
             <nav className="flex items-center gap-2">
               <Button
                 variant={activeTab === "portfolio" ? "default" : "ghost"}
                 onClick={() => setActiveTab("portfolio")}
-                className={`text-sm font-medium ${
+                className={`text-sm font-medium px-3 py-1 ${
                   activeTab === "portfolio"
                     ? "bg-[rgb(182,255,62)] text-black hover:bg-[rgb(182,255,62)]/90"
                     : "text-white/70 hover:text-white hover:bg-white/10"
                 }`}
               >
-                <PieChart className="h-4 w-4 mr-2" />
+                <PieChart className="h-3 w-3 mr-1" />
                 My Portfolio
               </Button>
               <Button
                 variant={activeTab === "buy" ? "default" : "ghost"}
                 onClick={() => setActiveTab("buy")}
-                className={`text-sm font-medium ${
+                className={`text-sm font-medium px-3 py-1 ${
                   activeTab === "buy"
                     ? "bg-[rgb(182,255,62)] text-black hover:bg-[rgb(182,255,62)]/90"
                     : "text-white/70 hover:text-white hover:bg-white/10"
                 }`}
               >
-                <ShoppingCart className="h-4 w-4 mr-2" />
+                <ShoppingCart className="h-3 w-3 mr-1" />
                 Buy Tokens
               </Button>
             </nav>
@@ -47,8 +46,7 @@ export default function Page() {
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-8">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
         {activeTab === "portfolio" ? <WalletHoldings /> : <TokenCatalog />}
       </main>
     </div>

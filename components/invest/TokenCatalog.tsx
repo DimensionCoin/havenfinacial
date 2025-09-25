@@ -1,9 +1,8 @@
-// app/invest/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Image from "next/image";
-import { X, RefreshCw } from "lucide-react";
+import { X } from "lucide-react";
 import {
   type TokenMeta,
   tokensForCluster,
@@ -248,68 +247,42 @@ export default function TokenCatalog({
   /* -------------------------------- render -------------------------------- */
 
   return (
-    <div
-      className={`rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] shadow-2xl ${className}`}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-6 py-4 border-b border-white/10">
-        <div className="flex items-center gap-4">
-          <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-[rgb(182,255,62)]/20 to-transparent border border-[rgb(182,255,62)]/30 flex items-center justify-center backdrop-blur-sm">
-            <span className="text-[rgb(182,255,62)] font-bold text-sm">
-              INV
-            </span>
-          </div>
-          <div>
-            <div className="text-white font-semibold text-lg leading-tight">
-              Invest
-            </div>
-            <div className="text-sm text-white/60 leading-tight">
-              Buy top tokens with one tap. Gas sponsored.
-            </div>
-          </div>
-        </div>
+    <div className={`vision-window ${className}`}>
+      
 
-        {/* Refresh button */}
-        <button
-          type="button"
-          onClick={() => void fetchPrices(priceIds)}
-          disabled={pricesLoading || !priceIds.length}
-          className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-xl border border-white/20 hover:bg-white/10 text-white/80 disabled:opacity-50 transition-all duration-200 backdrop-blur-sm"
-        >
-          <RefreshCw
-            className={`h-4 w-4 ${pricesLoading ? "animate-spin" : ""}`}
-          />
-          Refresh
-        </button>
-      </div>
-
-      {/* Body */}
-      <div className="p-6">
+      <div className="p-4">
         {!grouped.length ? (
           <div className="text-center py-12">
-            <div className="text-white/60 mb-2">No tokens available</div>
-            <div className="text-sm text-white/40">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-full bg-white/10" />
+            </div>
+            <div className="text-white/70 mb-2 text-base font-medium">
+              No tokens available
+            </div>
+            <div className="text-sm text-white/50 max-w-md mx-auto">
               Add mints to{" "}
-              <code className="bg-white/10 px-2 py-1 rounded">
+              <code className="bg-white/10 px-2 py-1 rounded font-mono text-xs">
                 mints.mainnet
               </code>{" "}
               in{" "}
-              <code className="bg-white/10 px-2 py-1 rounded">
+              <code className="bg-white/10 px-2 py-1 rounded font-mono text-xs">
                 /lib/tokens.ts
               </code>
             </div>
           </div>
         ) : (
-          <div className="space-y-8">
+          <div className="space-y-6">
             {grouped.map(([cat, tokens]) => (
               <section key={cat}>
-                <h4 className="mb-4 text-sm font-semibold tracking-wider text-white/70 uppercase flex items-center gap-2">
-                  <div className="h-1 w-8 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full" />
-                  {cat}
-                </h4>
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="h-1 w-6 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full" />
+                  <h4 className="text-sm font-bold tracking-wide text-white uppercase">
+                    {cat}
+                  </h4>
+                  <div className="flex-1 h-px bg-gradient-to-r from-white/20 to-transparent" />
+                </div>
 
-                {/* Grid */}
-                <ul className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                   {tokens.map((t) => {
                     const mainnetMint = getMintFor(t, MAINNET);
                     const p = mainnetMint ? prices[mainnetMint] : undefined;
@@ -336,19 +309,21 @@ export default function TokenCatalog({
                     return (
                       <li
                         key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
-                        className="group rounded-2xl border border-white/10 bg-white/5 hover:bg-white/10 hover:border-white/20 transition-all duration-300 p-4 backdrop-blur-sm"
+                        className="vision-card group p-4 transition-all duration-300 hover:scale-[1.02]"
                       >
-                        <div className="flex items-start gap-4">
+                        <div className="flex items-start gap-3">
                           <div className="relative">
                             <Image
                               src={
                                 t.logo ||
-                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
+                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                                "/placeholder.svg" ||
+                                "/placeholder.svg"
                               }
                               alt={`${t.name} logo`}
-                              width={48}
-                              height={48}
-                              className="h-12 w-12 rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
+                              width={40}
+                              height={40}
+                              className="h-10 w-10 rounded-full border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
                             />
                             {pricesLoading && (
                               <div className="absolute -top-1 -right-1 h-3 w-3 bg-[rgb(182,255,62)] rounded-full animate-pulse" />
@@ -357,21 +332,21 @@ export default function TokenCatalog({
 
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2 mb-1">
-                              <span className="text-white font-semibold truncate text-lg">
+                              <span className="text-white font-semibold truncate text-sm">
                                 {t.name}
                               </span>
-                              <span className="text-sm text-white/50 font-medium">
+                              <span className="text-xs text-white/50 font-medium px-1.5 py-0.5 bg-white/10 rounded">
                                 {t.symbol}
                               </span>
                             </div>
 
-                            <div className="flex items-center gap-3 mb-3">
-                              <span className="text-white/90 font-semibold text-lg">
+                            <div className="flex items-center gap-2 mb-3">
+                              <span className="text-white font-bold text-base">
                                 {fmtMoney(local)}
                               </span>
                               {changeStr && (
                                 <span
-                                  className={`text-sm font-medium ${changeColor} flex items-center gap-1`}
+                                  className={`text-xs font-medium ${changeColor} flex items-center gap-1`}
                                 >
                                   {typeof change === "number" &&
                                     change > 0 &&
@@ -388,7 +363,7 @@ export default function TokenCatalog({
                               type="button"
                               onClick={() => openBuy(t)}
                               disabled={disabled}
-                              className="w-full text-sm px-4 py-2.5 rounded-xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-lg hover:shadow-xl group-hover:scale-[1.02]"
+                              className="vision-accent w-full text-xs px-3 py-2 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 group-hover:scale-[1.02]"
                             >
                               Buy {t.symbol}
                             </button>
@@ -401,7 +376,7 @@ export default function TokenCatalog({
               </section>
             ))}
             {pricesError && (
-              <div className="text-center p-4 rounded-xl bg-red-500/10 border border-red-500/20">
+              <div className="text-center p-4 rounded-xl bg-red-500/10 border border-red-500/20 backdrop-blur-sm">
                 <div className="text-red-400 font-medium">
                   Failed to fetch prices
                 </div>
@@ -617,16 +592,18 @@ function BuyModal({
       role="dialog"
     >
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/70 backdrop-blur-md"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-lg rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] p-6 shadow-2xl">
+      <div className="vision-modal relative w-full max-w-lg rounded-2xl p-6">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <Image
               src={
                 token.logo ||
-                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
+                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                "/placeholder.svg" ||
+                "/placeholder.svg"
               }
               alt={`${token.name} logo`}
               width={40}
@@ -634,16 +611,14 @@ function BuyModal({
               className="h-10 w-10 rounded-xl border border-white/20 object-contain bg-white/5"
             />
             <div>
-              <h4 className="text-white font-semibold text-lg">
-                Buy {token.name}
-              </h4>
+              <h4 className="text-white font-bold text-lg">Buy {token.name}</h4>
               <div className="text-white/60 text-sm">{token.symbol}</div>
             </div>
           </div>
           <button
             aria-label="Close"
             onClick={onClose}
-            className="p-2 rounded-xl hover:bg-white/10 text-white/60 hover:text-white transition-colors"
+            className="vision-button p-2 rounded-xl text-white/60 hover:text-white transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -651,7 +626,7 @@ function BuyModal({
 
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-white/80 mb-2">
+            <label className="block text-sm font-semibold text-white/90 mb-2">
               Spend ({displayCurrency})
             </label>
             <input
@@ -660,7 +635,7 @@ function BuyModal({
               step="0.01"
               value={amountStr}
               onChange={(e) => setAmountStr(e.target.value)}
-              className="w-full rounded-xl border border-white/20 bg-white/5 backdrop-blur-sm px-4 py-3 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/50 focus:border-[rgb(182,255,62)] transition-all"
+              className="vision-input w-full rounded-xl px-4 py-3 text-white placeholder-white/40 focus:outline-none transition-all"
               placeholder="0.00"
               inputMode="decimal"
             />
@@ -679,7 +654,7 @@ function BuyModal({
           </div>
 
           {/* Quote panel */}
-          <div className="rounded-xl border border-white/10 bg-white/5 backdrop-blur-sm p-4">
+          <div className="vision-card rounded-xl p-4">
             {!spendValid ? (
               <div className="text-center py-4">
                 <div className="text-red-400 font-medium">Invalid amount</div>
@@ -737,7 +712,7 @@ function BuyModal({
             </div>
           )}
           {signature && (
-            <div className="rounded-2xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
+            <div className="rounded-xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
               <div className="text-[rgb(182,255,62)] font-medium">
                 Purchase submitted successfully!
               </div>
@@ -749,7 +724,7 @@ function BuyModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-6 py-2.5 text-sm rounded-xl border border-white/20 text-white/80 hover:bg-white/10 transition-all duration-200"
+            className="vision-button px-6 py-2.5 text-sm rounded-xl text-white/80 hover:text-white transition-all duration-200"
           >
             Cancel
           </button>
@@ -757,7 +732,7 @@ function BuyModal({
             type="button"
             disabled={!canSwap}
             onClick={onBuy}
-            className="px-6 py-2.5 text-sm rounded-xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 shadow-lg hover:shadow-xl"
+            className="vision-accent px-6 py-2.5 text-sm rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
           >
             {swapping ? "Processing..." : `Buy ${token.symbol}`}
           </button>
