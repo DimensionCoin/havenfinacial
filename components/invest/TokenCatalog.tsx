@@ -1,3 +1,4 @@
+// app/invest/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -11,7 +12,9 @@ import {
 } from "@/lib/tokens";
 import { useUser } from "@/providers/UserProvider";
 import { usePrivy } from "@privy-io/react-auth";
-import { useServerSponsoredJupSwap } from "@/hooks/useServerSponsoredJupSwap.ts";
+import { useSolanaWallets } from "@privy-io/react-auth/solana";
+import { useServerSponsoredJupSwap } from "@/hooks/useServerSponsoredJupSwap";
+import { toast } from "react-hot-toast";
 
 /* ------------------------------- config ---------------------------------- */
 
@@ -28,24 +31,23 @@ const DEFAULT_CATEGORY_ORDER: TokenCategory[] = [
   "Meme",
   "Stocks",
 ];
+const MAINNET = "mainnet"; // hard-force mainnet UI everywhere
 
-const MAINNET = "mainnet"; // ❗ force mainnet everywhere
-
-// Price + Quote APIs (Jupiter Lite)
+// Jupiter Lite endpoints for price/quote PREVIEW (server builds the real swap)
 const JUP_PRICE_BASE =
   process.env.NEXT_PUBLIC_JUP_PRICE_BASE || "https://lite-api.jup.ag/price/v3";
 const JUP_QUOTE_BASE =
   process.env.NEXT_PUBLIC_JUP_QUOTE_BASE ||
   "https://lite-api.jup.ag/swap/v1/quote";
 
-// USDC settings
+// USDC mainnet (for preview math only; server enforces everything)
 const USDC_MAINNET =
   process.env.NEXT_PUBLIC_USDC_MAINNET_MINT ||
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDC_DECIMALS = 6;
 
-// Flat service fee (USD)
-const FLAT_FEE_USD = 0.2;
+// Flat service fee (USD) — UI only; server also collects this in the tx
+const FLAT_FEE_USD = 0.25;
 
 /* -------------------------------- types ---------------------------------- */
 
@@ -72,7 +74,7 @@ type JupQuote = {
   timeTaken: number;
 } | null;
 
-/* ------------------------------- component -------------------------------- */
+/* ------------------------------- page ---------------------------------- */
 
 export default function TokenCatalog({
   onStartBuy,
@@ -82,24 +84,32 @@ export default function TokenCatalog({
 }: Props) {
   const { user } = useUser();
   const { getAccessToken, ready: privyReady, authenticated } = usePrivy();
+  const { wallets } = useSolanaWallets();
+
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
+  // prefer app's deposit wallet -> user's primary wallet -> first Privy Solana wallet
   const depositOwnerBase58 = useMemo(() => {
     const u = user as unknown;
+    let dep: string | undefined;
+    let w: string | undefined;
     if (u && typeof u === "object") {
       const rec = u as Record<string, unknown>;
-      const dep = rec.depositWallet as Record<string, unknown> | undefined;
-      const w = rec.wallet as Record<string, unknown> | undefined;
-      const a1 = typeof dep?.address === "string" ? (dep.address as string) : undefined;
-      const a2 = typeof w?.address === "string" ? (w.address as string) : undefined;
-      return a1 || a2 || "";
+      const depObj = rec["depositWallet"] as
+        | Record<string, unknown>
+        | undefined;
+      const wObj = rec["wallet"] as Record<string, unknown> | undefined;
+      const depAddr = depObj?.["address"];
+      const wAddr = wObj?.["address"];
+      dep = typeof depAddr === "string" ? depAddr : undefined;
+      w = typeof wAddr === "string" ? wAddr : undefined;
     }
-    return "";
-  }, [user]);
+    const privyFirst = wallets[0]?.address;
+    return dep || w || privyFirst || "";
+  }, [user, wallets]);
 
-  // ❗ Force mainnet token list
+  // force mainnet token list
   const all = useMemo(() => tokensForCluster(MAINNET), []);
-
   const filtered = useMemo(
     () =>
       categories?.length
@@ -275,7 +285,7 @@ export default function TokenCatalog({
 
       {/* Body */}
       <div className="p-6">
-        {grouped.length === 0 ? (
+        {!grouped.length ? (
           <div className="text-center py-12">
             <div className="text-white/60 mb-2">No tokens available</div>
             <div className="text-sm text-white/40">
@@ -294,7 +304,7 @@ export default function TokenCatalog({
             {grouped.map(([cat, tokens]) => (
               <section key={cat}>
                 <h4 className="mb-4 text-sm font-semibold tracking-wider text-white/70 uppercase flex items-center gap-2">
-                  <div className="h-1 w-8 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full"></div>
+                  <div className="h-1 w-8 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full" />
                   {cat}
                 </h4>
 
@@ -333,11 +343,7 @@ export default function TokenCatalog({
                             <Image
                               src={
                                 t.logo ||
-                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                                "/placeholder.svg" ||
-                                "/placeholder.svg" ||
-                                "/placeholder.svg" ||
-                                "/placeholder.svg"
+                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
                               }
                               alt={`${t.name} logo`}
                               width={48}
@@ -345,7 +351,7 @@ export default function TokenCatalog({
                               className="h-12 w-12 rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
                             />
                             {pricesLoading && (
-                              <div className="absolute -top-1 -right-1 h-3 w-3 bg-[rgb(182,255,62)] rounded-full animate-pulse"></div>
+                              <div className="absolute -top-1 -right-1 h-3 w-3 bg-[rgb(182,255,62)] rounded-full animate-pulse" />
                             )}
                           </div>
 
@@ -419,9 +425,9 @@ export default function TokenCatalog({
           depositOwnerBase58={depositOwnerBase58}
           getAccessToken={getAccessToken}
           onClose={closeModal}
-          onConfirm={(amountFiat) => {
-            onStartBuy?.({ token: selected, amountFiat });
-          }}
+          onConfirm={(amountFiat) =>
+            onStartBuy?.({ token: selected, amountFiat })
+          }
         />
       )}
     </div>
@@ -464,13 +470,13 @@ function BuyModal({
     Number.isFinite(amountDisplay) &&
     amountDisplay > FLAT_FEE_USD * (displayCurrency === "USD" ? 1 : fxRate);
 
-  const outputMint = getMintFor(token, MAINNET) || ""; // ❗ mainnet mint only
+  const outputMint = getMintFor(token, MAINNET) || ""; // mainnet mint only
   const [outDecimals, setOutDecimals] = useState<number | null>(null);
   const [quote, setQuote] = useState<JupQuote>(null);
   const [qLoading, setQLoading] = useState(false);
   const [qError, setQError] = useState<string | null>(null);
 
-  // one-time (per token) decimals fetch for UI
+  // token decimals (for readable outAmount)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -490,6 +496,7 @@ function BuyModal({
     };
   }, [outputMint, jupPriceBase]);
 
+  // net USDC-in after the fixed fee
   const computeInAmountRaw = (): number => {
     if (!spendValid) return 0;
     const amountUsdGross =
@@ -562,19 +569,32 @@ function BuyModal({
 
   const onBuy = useCallback(async () => {
     if (!canSwap || !outputMint) return;
+
+    const toastId = toast.loading(`Buying ${token.symbol}…`);
+
     try {
       const accessToken = await getAccessToken().catch(() => null);
-      await swap({
+      const res = await swap({
         fromOwnerBase58: depositOwnerBase58,
         outputMint,
-        amountDisplay, // local currency the user entered
-        fxRate, // local → USD conversion
+        amountDisplay, // user-entered in display currency
+        fxRate, // display → USD
         accessToken,
       });
+
+      // Try to surface a short tx id in the toast
+      const sigFromCall = res as string | null;
+      const sig = sigFromCall || signature;
+      const tail = sig ? ` • ${sig.slice(0, 6)}…${sig.slice(-6)}` : "";
+
+      toast.success(`Purchase submitted${tail}`, { id: toastId });
+
       onConfirm(amountDisplay);
       onClose();
-    } catch {
-      /* error is rendered below */
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e || "Failed");
+      toast.error(`Purchase failed: ${msg}`, { id: toastId });
+      // swapError panel still shows below for context
     }
   }, [
     canSwap,
@@ -586,6 +606,8 @@ function BuyModal({
     fxRate,
     onConfirm,
     onClose,
+    token.symbol,
+    signature,
   ]);
 
   return (
@@ -604,11 +626,7 @@ function BuyModal({
             <Image
               src={
                 token.logo ||
-                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                "/placeholder.svg" ||
-                "/placeholder.svg" ||
-                "/placeholder.svg" ||
-                "/placeholder.svg"
+                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
               }
               alt={`${token.name} logo`}
               width={40}
@@ -673,7 +691,7 @@ function BuyModal({
               <div className="text-center py-4">
                 <div className="text-white/70">Getting live price...</div>
                 <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-[rgb(182,255,62)] rounded-full animate-pulse w-1/2"></div>
+                  <div className="h-full bg-[rgb(182,255,62)] rounded-full animate-pulse w-1/2" />
                 </div>
               </div>
             ) : qError ? (
@@ -699,7 +717,7 @@ function BuyModal({
                     </span>
                   </div>
                 )}
-                <div className="h-px bg-white/10"></div>
+                <div className="h-px bg-white/10" />
                 <div className="text-xs text-white/40 text-center">
                   Live quote • Updates automatically
                 </div>
@@ -719,7 +737,7 @@ function BuyModal({
             </div>
           )}
           {signature && (
-            <div className="rounded-xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
+            <div className="rounded-2xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
               <div className="text-[rgb(182,255,62)] font-medium">
                 Purchase submitted successfully!
               </div>

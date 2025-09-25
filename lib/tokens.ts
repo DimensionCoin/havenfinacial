@@ -94,6 +94,30 @@ export const TOKENS: TokenMeta[] = [
       // devnet: "<devnet-NVDA-mint>",
     },
   },
+  {
+    name: "NasDaq",
+    symbol: "QQQ",
+    id: "qqqx",
+    logo: "/logos/qqq.png",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ",
+      // devnet: "<devnet-NVDA-mint>",
+    },
+  },
+  {
+    name: "Apple",
+    symbol: "AAPL",
+    id: "aaplx",
+    logo: "/logos/aapl.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp",
+      // devnet: "<devnet-NVDA-mint>",
+    },
+  },
 ];
 
 export const CRYPTO_FLAT_FEE_USDC_UI: number = (() => {

@@ -403,7 +403,7 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
               </div>
               <div className="min-w-0 flex-1">
                 <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight truncate">
-                  Account Balance
+                  Deposit Account 
                 </h3>
                 <p className="text-xs sm:text-sm text-white/60 mt-1">
                   Available Funds

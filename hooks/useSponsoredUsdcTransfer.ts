@@ -1,4 +1,3 @@
-// hooks/useSponsoredUsdcTransfer.ts
 "use client";
 
 import { useCallback, useState } from "react";
@@ -18,26 +17,17 @@ import {
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
 
 export type TransferNotify = {
-  /** recipient owner (base58) so the server can resolve the user */
   toOwnerBase58: string;
-  /** optional custom copy; server has a nice default */
   message?: string;
-  /** optional for templating a friendly “You received $X” server message */
   amountUi?: number;
 };
 
 export type TransferInput = {
-  /** sender authority; pass user.depositWallet.address */
   fromOwnerBase58: string;
-  /** recipient owner */
   toOwnerBase58: string;
-  /** amount the recipient should receive (USDC, UI) */
   amountUi: number;
-  /** optional bearer; cookie fallback works too */
   accessToken?: string | null;
-  /** optional override; default /api/transfer */
   backendUrl?: string;
-  /** ask server to create a notification for the recipient */
   notify?: TransferNotify;
 };
 
@@ -50,7 +40,7 @@ const TREASURY_OWNER = new PublicKey(
   process.env.NEXT_PUBLIC_APP_TREASURY_OWNER!
 );
 
-// Keep in sync with your server’s TRANSFER_FEE_UI
+// USDC(6)
 const DECIMALS = 6;
 
 async function detectTokenProgramId(conn: Connection, mint: PublicKey) {
@@ -75,7 +65,7 @@ export function useSponsoredUsdcTransfer() {
       amountUi,
       accessToken,
       backendUrl,
-      notify, // <-- include notify in params
+      notify,
     }: TransferInput) => {
       setLoading(true);
       setError(null);
@@ -89,16 +79,14 @@ export function useSponsoredUsdcTransfer() {
         const fromOwner = new PublicKey(fromOwnerBase58);
         const toOwner = new PublicKey(toOwnerBase58);
 
-        // Find the embedded wallet that matches the sender address
+        // User’s embedded wallet (must match fromOwner)
         const userWallet = wallets.find((w) => w.address === fromOwnerBase58);
-        if (!userWallet) {
-          throw new Error("Source wallet not available in this session.");
-        }
+        if (!userWallet) throw new Error("Source wallet not available.");
 
         const conn = new Connection(RPC, "confirmed");
         const tokenProgramId = await detectTokenProgramId(conn, USDC_MINT);
 
-        // ATAs
+        // ATAs (idempotent, payer = Haven)
         const fromAta = getAssociatedTokenAddressSync(
           USDC_MINT,
           fromOwner,
@@ -118,7 +106,6 @@ export function useSponsoredUsdcTransfer() {
           tokenProgramId
         );
 
-        // Create ATAs idempotently (payer = Haven)
         const ixs = [
           createAssociatedTokenAccountIdempotentInstruction(
             HAVEN_FEEPAYER,
@@ -143,17 +130,15 @@ export function useSponsoredUsdcTransfer() {
           ),
         ];
 
-        // Amount the recipient should receive
+        // They receive amountUi; fee is charged ON TOP (sender pays)
         const amountUnits = Math.round(amountUi * 10 ** DECIMALS);
 
-        // Fee charged ON TOP (sender pays amount + fee)
-        const feeUiEnv =
+        const feeUi =
           Number(process.env.NEXT_PUBLIC_TRANSFER_FEE_UI) ||
           Number(process.env.TRANSFER_FEE_UI) ||
-          0.015;
-        const feeUnits = Math.round(feeUiEnv * 10 ** DECIMALS);
+          0.015; // $0.015 USDC default
+        const feeUnits = Math.round(feeUi * 10 ** DECIMALS);
 
-        // Two transfers; authority = sender (user)
         ixs.push(
           createTransferCheckedInstruction(
             fromAta,
@@ -177,8 +162,10 @@ export function useSponsoredUsdcTransfer() {
           )
         );
 
-        // Build with Haven as fee payer (server will add that signature)
-        const { blockhash } = await conn.getLatestBlockhash("finalized");
+        // Fresh blockhash (processed is freshest to avoid expiration)
+        const { blockhash } = await conn.getLatestBlockhash("processed");
+
+        // Haven sponsors fees
         const msg = new TransactionMessage({
           payerKey: HAVEN_FEEPAYER,
           recentBlockhash: blockhash,
@@ -187,14 +174,14 @@ export function useSponsoredUsdcTransfer() {
 
         const tx = new VersionedTransaction(msg);
 
-        // User signs as authority
+        // User signs as token authority
         const signedByUser = await userWallet.signTransaction(tx);
 
-        // Ship to backend for Haven fee-payer signature + broadcast
-        const bodyObj: any = {
+        // Send to backend for Haven signature + broadcast
+        const body: Record<string, unknown> = {
           transaction: Buffer.from(signedByUser.serialize()).toString("base64"),
         };
-        if (notify) bodyObj.notify = notify; // <-- forward notify (includes amountUi if provided)
+        if (notify) body.notify = notify;
 
         const headers: HeadersInit = {
           "Content-Type": "application/json",
@@ -206,7 +193,7 @@ export function useSponsoredUsdcTransfer() {
           credentials: "include",
           cache: "no-store",
           headers,
-          body: JSON.stringify(bodyObj),
+          body: JSON.stringify(body),
         });
 
         const j = await res.json().catch(() => ({}));
