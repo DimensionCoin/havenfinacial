@@ -118,6 +118,54 @@ export const TOKENS: TokenMeta[] = [
       // devnet: "<devnet-NVDA-mint>",
     },
   },
+  {
+    name: "Alphabet",
+    symbol: "GOOGL",
+    id: "googlx",
+    logo: "/logos/google.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN",
+      // devnet: "<devnet-NVDA-mint>",
+    },
+  },
+  {
+    name: "Raydium",
+    symbol: "RAY",
+    id: "ray",
+    logo: "/logos/ray.jpg",
+    category: "DeFi",
+    decimals: 8,
+    mints: {
+      mainnet: "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Jupiter",
+    symbol: "JUP",
+    id: "jup",
+    logo: "/logos/jup.webp",
+    category: "DeFi",
+    decimals: 8,
+    mints: {
+      mainnet: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Kamino",
+    symbol: "KMNO",
+    id: "kmno",
+    logo: "/logos/kmno.jpg",
+    category: "DeFi",
+    decimals: 8,
+    mints: {
+      mainnet: "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
 ];
 
 export const CRYPTO_FLAT_FEE_USDC_UI: number = (() => {
