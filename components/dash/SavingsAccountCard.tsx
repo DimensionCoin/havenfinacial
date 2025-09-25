@@ -1,14 +1,25 @@
 "use client";
 
 import type React from "react";
-import { useCallback, useEffect,  useState } from "react";
+import { useCallback, useEffect, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { X, Download, Upload } from "lucide-react";
 import { toast } from "react-hot-toast";
-import { usePrivy, useWallets } from "@privy-io/react-auth";
+import { usePrivy } from "@privy-io/react-auth";
+import { useSolanaWallets } from "@privy-io/react-auth/solana";
 import { useUser } from "@/providers/UserProvider";
+import type { VersionedTransaction } from "@solana/web3.js";
+import { Buffer } from "buffer";
+import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
+import { useSavingsActions } from "@/hooks/useSavingsActions"; // <-- uses deposit + withdraw
 
-/* --------------------------- Types for /api/fx --------------------------- */
+// Ensure Buffer exists in the browser
+if (typeof window !== "undefined") {
+  const globalWindow = window as Window & { Buffer?: typeof Buffer };
+  globalWindow.Buffer = globalWindow.Buffer ?? Buffer;
+}
+
+/* --------------------------- Types --------------------------- */
 type FxResponse = {
   base: "USD";
   target: string;
@@ -18,7 +29,14 @@ type FxResponse = {
   asOf?: string | null;
 };
 
-/* --------------------------- Local helpers/UI ---------------------------- */
+// NOTE: API returns { apy: number } (decimal), not supplyApyPct
+type ApyApiResponse = {
+  apy?: number; // e.g. 0.0874 for 8.74%
+  error?: string;
+  note?: string;
+};
+
+/* --------------------------- Helpers ------------------------- */
 function formatFiatNarrow(n: number, currency: string) {
   try {
     const nf = new Intl.NumberFormat(undefined, {
@@ -38,6 +56,13 @@ function formatFiatNarrow(n: number, currency: string) {
     return n.toFixed(2);
   }
 }
+
+function formatPct(n: number | null | undefined) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const digits = Math.abs(n) >= 1 ? 1 : 2;
+  return `${n.toFixed(digits)}%`;
+}
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
@@ -54,17 +79,35 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
-/* ------------------------------ Component -------------------------------- */
+/* ---------------------------- Page --------------------------- */
 const SavingsAccount: React.FC = () => {
   const { user, loading: userLoading, refresh: refreshUser } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
-  const { wallets } = useWallets();
+  const { wallets: solWallets } = useSolanaWallets();
+
+  // First-time "open & deposit" hook (kept)
+  const {
+    deposit: openAndDepositHook,
+    loading: hookLoading,
+    error: hookErr,
+  } = useSavingsDeposit();
+
+  // New generic actions hook (deposit + withdraw into existing account)
+  const {
+    deposit: depositAction,
+    withdraw: withdrawAction,
+    loading: actionsLoading,
+    error: actionsErr,
+  } = useSavingsActions();
 
   const walletAddress = user?.depositWallet?.address ?? null;
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  const hasMarginfiAccount =
-    !!user?.marginfi?.accountPk && !!user?.marginfi?.usdcBankPk;
+  // Consider Marginfi account present iff we have an accountPk
+  const hasMarginfiAccount = !!user?.marginfi?.accountPk;
+
+  // Cached hints
+  const cachedAccountPk = user?.marginfi?.accountPk || null;
 
   // local state
   const [savingsUsdc, setSavingsUsdc] = useState<number>(0);
@@ -73,17 +116,21 @@ const SavingsAccount: React.FC = () => {
   const [fxRate, setFxRate] = useState<number>(1);
   const [err, setErr] = useState<string | null>(null);
 
-  // modal state: for existing accounts (deposit/withdraw)
+  // APY state
+  const [apyLoading, setApyLoading] = useState<boolean>(false);
+  const [apyPct, setApyPct] = useState<number | null>(null);
+
+  // modal state
   type Modal = null | { kind: "deposit" | "withdraw" };
   const [modal, setModal] = useState<Modal>(null);
-  const modalOpen = modal !== null;
-
-  // modal state: for opening a new account
   const [openModal, setOpenModal] = useState(false);
 
-  const loading = userLoading || balLoading || fxLoading;
+  const loading =
+    userLoading || balLoading || fxLoading || hookLoading || actionsLoading;
 
-  const refreshBalance = useCallback(async () => {
+  /* --------------------- Balance & FX ---------------------- */
+  const refreshBalance = useCallback(async (): Promise<void> => {
+    console.log("[UI] refreshBalance", { walletAddress, hasMarginfiAccount });
     if (!walletAddress || !hasMarginfiAccount) {
       setSavingsUsdc(0);
       return;
@@ -94,10 +141,15 @@ const SavingsAccount: React.FC = () => {
         `/api/savings/balance?owner58=${encodeURIComponent(walletAddress)}`,
         { cache: "no-store" }
       );
-      if (!r.ok) throw new Error(await r.text());
-      const j = (await r.json()) as { amountUi?: number };
-      setSavingsUsdc(Number(j?.amountUi || 0));
+      const raw = await r.text();
+      console.log("[UI] /api/savings/balance raw:", raw);
+      if (!r.ok) throw new Error(raw);
+      const j = JSON.parse(raw) as { amountUi?: number };
+      const amt = Number(j?.amountUi || 0);
+      console.log("[UI] parsed balance:", { amountUi: amt });
+      setSavingsUsdc(amt);
     } catch (e) {
+      console.error("[UI] refreshBalance error:", e);
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
       setBalLoading(false);
@@ -109,7 +161,38 @@ const SavingsAccount: React.FC = () => {
     void refreshBalance();
   }, [refreshBalance, hasMarginfiAccount]);
 
-  /** Convert to user's display currency via /api/fx (USDC ~= USD) */
+  // Fetch APY (reads { apy: decimal })
+  const refreshApy = useCallback(async (): Promise<void> => {
+    if (!hasMarginfiAccount) {
+      setApyPct(null);
+      return;
+    }
+
+    console.log("[UI] refreshApy start", { hasMarginfiAccount });
+    setApyLoading(true);
+    try {
+      const r = await fetch(`/api/savings/apy`, { cache: "no-store" });
+      const raw = await r.text();
+      console.log("[UI] /api/savings/apy raw:", raw);
+      const j = JSON.parse(raw) as ApyApiResponse;
+      if (!r.ok) throw new Error(j?.error || "Failed to fetch APY");
+
+      const apyDecimal = typeof j.apy === "number" ? j.apy : null;
+      const pct = apyDecimal != null ? apyDecimal * 100 : null;
+      console.log("[UI] parsed APY:", { apyDecimal, pct });
+      setApyPct(pct);
+    } catch (e) {
+      console.error("[UI] refreshApy error:", e);
+      setApyPct(null);
+    } finally {
+      setApyLoading(false);
+    }
+  }, [hasMarginfiAccount]);
+
+  useEffect(() => {
+    void refreshApy();
+  }, [refreshApy]);
+
   const convertFx = useCallback(
     async (amount: number, currency: string): Promise<FxResponse> => {
       const accessToken = authenticated
@@ -130,24 +213,16 @@ const SavingsAccount: React.FC = () => {
         8_000,
         "FX fetch"
       );
-      if (!resp.ok) throw new Error(await resp.text());
-      const data = (await resp.json()) as FxResponse;
-      if (
-        !data ||
-        data.base !== "USD" ||
-        !Number.isFinite(data.rate) ||
-        data.rate <= 0
-      ) {
-        throw new Error("Bad FX payload");
-      }
-      return data;
+      const raw = await resp.text();
+      console.log("[UI] /api/fx raw:", raw);
+      if (!resp.ok) throw new Error(raw);
+      return JSON.parse(raw) as FxResponse;
     },
     [authenticated, getAccessToken]
   );
 
   useEffect(() => {
     if (!hasMarginfiAccount) return;
-    if (!ready || !authenticated) return;
     let cancelled = false;
     (async () => {
       setErr(null);
@@ -158,8 +233,12 @@ const SavingsAccount: React.FC = () => {
       setFxLoading(true);
       try {
         const fx = await convertFx(savingsUsdc, displayCurrency);
-        if (!cancelled) setFxRate(fx.rate);
+        if (!cancelled) {
+          console.log("[UI] FX parsed:", fx);
+          setFxRate(fx.rate);
+        }
       } catch (e) {
+        console.error("[UI] FX error:", e);
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setFxLoading(false);
@@ -168,162 +247,163 @@ const SavingsAccount: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [
-    ready,
-    authenticated,
-    hasMarginfiAccount,
-    savingsUsdc,
-    displayCurrency,
-    convertFx,
-  ]);
+  }, [hasMarginfiAccount, savingsUsdc, displayCurrency, convertFx]);
 
-  // Display value computed on the fly when needed; no memo required
+  const fiatValue = useMemo(() => savingsUsdc * fxRate, [savingsUsdc, fxRate]);
 
-  // Sign with Privy embedded Solana wallet (client-only)
-  const signWithEmbedded = useCallback(
-    async (txBase64: string): Promise<string> => {
-      const sol = wallets.find((w) => {
-        const r = (w as unknown) as Record<string, unknown>;
-        return r.chainType === "solana" && r.walletClientType === "privy";
-      }) as unknown as
-        | { signTransaction?: (txBase64: string) => Promise<string> }
-        | undefined;
-      if (!sol?.signTransaction)
-        throw new Error("No embedded Solana wallet available for signing");
-      return await sol.signTransaction(txBase64);
+  const manualRefresh = useCallback(async () => {
+    setErr(null);
+    await Promise.all([refreshBalance(), refreshApy()]);
+  }, [refreshBalance, refreshApy]);
+
+  /* ----------------- Embedded wallet signer (Privy) ----------------- */
+  const signWithPrivy = useCallback(
+    async (tx: VersionedTransaction): Promise<VersionedTransaction> => {
+      const primary =
+        solWallets.find((w) => {
+          if (!walletAddress) return false;
+          return w.address.toLowerCase() === walletAddress.toLowerCase();
+        }) ?? solWallets.find((w) => w.walletClientType === "privy");
+
+      if (!primary?.signTransaction) {
+        throw new Error("Embedded Solana wallet not available for signing");
+      }
+      return await primary.signTransaction(tx);
     },
-    [wallets]
+    [solWallets, walletAddress]
   );
 
-  /* ----------------------- Open + deposit in one go ---------------------- */
-  const submitOpenAndDeposit = useCallback(
-    async (amountUi: number) => {
-      if (!walletAddress) return;
+  /* -------------------- Open + deposit (first time) -------------------- */
+  const onOpenAndDeposit = useCallback(
+    async (amountUi: number): Promise<void> => {
+      if (!walletAddress) {
+        toast.error("Missing wallet address");
+        return;
+      }
+      if (!ready || !authenticated) {
+        toast.error("Please sign in");
+        return;
+      }
       try {
-        // 1) backend builds initialize_account (+deposit) tx
-        const prep = await fetch("/api/savings/open-and-deposit", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            owner58: walletAddress,
-            amountUi,
-            decimals: 6,
-          }),
-          cache: "no-store",
+        await openAndDepositHook({
+          owner58: walletAddress,
+          amountUi,
+          privyId: user?.privyId,
+          signer: signWithPrivy, // signer(tx) -> tx
         });
-        if (!prep.ok) {
-          const t = await prep.text();
-          throw new Error(
-            `Prepare open+deposit failed: ${prep.status} ${t || "(no body)"}`
-          );
-        }
-        const { transaction } = (await prep.json()) as { transaction: string };
 
-        // 2) sign in browser
-        const userSigned = await signWithEmbedded(transaction);
-
-        // 3) server pays gas & broadcasts (no fee charged)
-        const send = await fetch("/api/savings/send", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ transaction: userSigned }),
-          cache: "no-store",
-        });
-        const j = (await send.json()) as { signature?: string; error?: string };
-        if (!send.ok || !j.signature)
-          throw new Error(j?.error || "Send failed");
-
-        toast.success("Savings account opened and funded", { icon: "✅" });
+        toast.success("Savings account opened and funded ✅");
         setOpenModal(false);
-        await Promise.all([refreshUser(), refreshBalance()]);
-      } catch (e) {
-        toast.error(
-          e instanceof Error ? e.message : "Failed to open & fund account"
-        );
+
+        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+      } catch (e: unknown) {
+        const message =
+          e instanceof Error ? e.message : "Failed to open & fund account";
+        toast.error(message);
       }
     },
-    [walletAddress, signWithEmbedded, refreshUser, refreshBalance]
+    [
+      walletAddress,
+      ready,
+      authenticated,
+      openAndDepositHook,
+      signWithPrivy,
+      user?.privyId,
+      refreshUser,
+      refreshBalance,
+      refreshApy,
+    ]
   );
 
-  /* ----------------------- Deposit / Withdraw existing ------------------- */
+  /* -------------------- Deposit / Withdraw (later) -------------------- */
   const onSubmitSavings = useCallback(
-    async (kind: "deposit" | "withdraw", amountUi: number) => {
-      if (!walletAddress) return;
+    async (kind: "deposit" | "withdraw", amountUi: number): Promise<void> => {
+      if (!walletAddress) {
+        toast.error("Missing wallet address");
+        return;
+      }
+      if (!ready || !authenticated) {
+        toast.error("Please sign in");
+        return;
+      }
+
       try {
-        const url =
-          kind === "deposit"
-            ? "/api/savings/prepare-deposit"
-            : "/api/savings/prepare-withdraw";
-        const prep = await fetch(url, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
+        if (kind === "deposit") {
+          console.log("[UI] depositAction start", {
+            owner58: walletAddress,
+            amountUi,
+            marginfiAccount: cachedAccountPk,
+          });
+
+          const res = await depositAction({
             owner58: walletAddress,
             amountUi,
             decimals: 6,
-          }),
-          cache: "no-store",
-        });
-        if (!prep.ok) {
-          const t = await prep.text();
-          throw new Error(
-            `Prepare ${kind} failed: ${prep.status} ${t || "(no body)"}`
-          );
+            ensureAta: true,
+            marginfiAccount: cachedAccountPk, // existing account
+            privyId: user?.privyId,
+            signer: signWithPrivy, // Privy/embedded signer
+          });
+
+          console.log("[UI] depositAction result:", res);
+          toast.success("Deposit submitted ✅");
+          setModal(null);
+          await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+          return;
         }
-        const { transaction } = (await prep.json()) as { transaction: string };
 
-        const userSigned = await signWithEmbedded(transaction);
-
-        const send = await fetch("/api/savings/send", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ transaction: userSigned }),
-          cache: "no-store",
+        // ---- Withdraw via hook ----
+        console.log("[UI] withdrawAction start", {
+          owner58: walletAddress,
+          amountUi,
+          marginfiAccount: cachedAccountPk,
         });
-        const j = (await send.json()) as { signature?: string; error?: string };
-        if (!send.ok || !j.signature)
-          throw new Error(j?.error || "Send failed");
 
-        toast.success(
-          `${kind === "deposit" ? "Deposit" : "Withdrawal"} submitted`,
-          { icon: "✅" }
-        );
+        const wres = await withdrawAction({
+          owner58: walletAddress,
+          amountUi,
+          decimals: 6,
+          ensureAta: true, // ensure dest ATA
+          marginfiAccount: cachedAccountPk, // must exist
+          privyId: user?.privyId,
+          signer: signWithPrivy,
+        });
+
+        console.log("[UI] withdrawAction result:", wres);
+        toast.success("Withdrawal submitted ✅");
         setModal(null);
-        await Promise.all([refreshUser(), refreshBalance()]);
+        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
       } catch (e) {
+        console.error("[UI] submit error:", e);
         toast.error(
           e instanceof Error ? e.message : `Failed to ${kind} savings`
         );
       }
     },
-    [walletAddress, signWithEmbedded, refreshUser, refreshBalance]
+    [
+      walletAddress,
+      ready,
+      authenticated,
+      user?.privyId,
+      cachedAccountPk,
+      refreshUser,
+      refreshBalance,
+      refreshApy,
+      depositAction,
+      withdrawAction,
+      signWithPrivy,
+    ]
   );
 
   const openDepositModal = useCallback(() => {
     if (hasMarginfiAccount) setModal({ kind: "deposit" });
   }, [hasMarginfiAccount]);
+
   const openWithdrawModal = useCallback(() => {
     if (hasMarginfiAccount) setModal({ kind: "withdraw" });
   }, [hasMarginfiAccount]);
 
-  useEffect(() => {
-    if (!modalOpen) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setModal(null);
-    window.addEventListener("keydown", onKey);
-    const html = document.documentElement;
-    const body = document.body;
-    const prevHtml = html.style.overflow;
-    const prevBody = body.style.overflow;
-    html.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      html.style.overflow = prevHtml;
-      body.style.overflow = prevBody;
-    };
-  }, [modalOpen]);
-
-  /* ─────────── NO ACCOUNT: only CTA card + modal to open & deposit ─────────── */
+  // If no account yet, show "open an account" card
   if (!hasMarginfiAccount) {
     return (
       <div className="space-y-6 vision-perspective">
@@ -332,27 +412,57 @@ const SavingsAccount: React.FC = () => {
             {err}
           </div>
         )}
+        {hookErr && (
+          <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
+            {hookErr}
+          </div>
+        )}
         <div className="relative group">
           <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)]">
-            <div className="mb-2">
-              <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight">
-                Savings Account
-              </h3>
-              <p className="text-xs sm:text-sm text-white/60 mt-1">
-                Set up your USDC savings
-              </p>
+          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+            <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
+
+            <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
+              <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+                <div className="relative flex-shrink-0">
+                  <div className="w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] shadow-[0_0_20px_rgba(182,255,62,0.6)] animate-pulse" />
+                  <div className="absolute inset-0 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] animate-ping opacity-20" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight truncate">
+                    Savings Account
+                  </h3>
+                  <p className="text-xs sm:text-sm text-white/60 mt-1">
+                    Available Funds
+                  </p>
+                </div>
+              </div>
             </div>
-            <div className="pt-4 sm:pt-6 border-t border-white/10 flex items-center justify-between gap-3">
-              <div className="text-white/70 text-sm">
-                You don’t have a savings account yet.
+
+            <div className="pt-4 sm:pt-6 border-t border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex-1">
+                <div className="text-white/70 text-sm mb-2 sm:mb-0">
+                  You don&apos;t have a savings account yet.
+                </div>
+                {apyPct && (
+                  <div className="text-xs text-white/50">
+                    Earn up to {formatPct(apyPct)} APY
+                  </div>
+                )}
               </div>
               <button
                 type="button"
-                onClick={() => setOpenModal(true)}
-                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)]"
+                onClick={() => {
+                  if (!ready || !authenticated) {
+                    toast.error("Please sign in");
+                    return;
+                  }
+                  setOpenModal(true);
+                }}
+                disabled={!ready || !authenticated || !walletAddress || loading}
+                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] disabled:opacity-50 flex-shrink-0"
               >
-                <span>Open an account</span>
+                <span>{loading ? "Preparing…" : "Open an account"}</span>
               </button>
             </div>
           </div>
@@ -361,58 +471,99 @@ const SavingsAccount: React.FC = () => {
         {openModal && (
           <OpenAccountModal
             onClose={() => setOpenModal(false)}
-            onSubmit={submitOpenAndDeposit}
+            onSubmit={onOpenAndDeposit}
+            apyPct={apyPct}
           />
         )}
       </div>
     );
   }
 
-  /* ─────────── HAS ACCOUNT: show balance + Deposit / Withdraw ─────────── */
+  // Show any actions hook errors too
+  const compositeErr = actionsErr || hookErr;
+
+  // Account exists → show balance + actions
   return (
     <div className="space-y-6 vision-perspective">
-      {err && (
+      {(err || compositeErr) && (
         <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-          {err}
+          {err || compositeErr}
         </div>
       )}
 
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)]">
-          <div className="mb-6 sm:mb-8">
-            <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight">
-              Savings Account
-            </h3>
-            <p className="text-xs sm:text-sm text-white/60 mt-1">
-              USDC savings balance
-            </p>
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+          <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
+
+          <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
+            <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+              <div className="relative flex-shrink-0">
+                <div className="w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] shadow-[0_0_20px_rgba(182,255,62,0.6)] animate-pulse" />
+                <div className="absolute inset-0 w-3 h-3 sm:w-4 sm:h-4 rounded-full bg-[rgb(182,255,62)] animate-ping opacity-20" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight truncate">
+                  Savings Account
+                </h3>
+                <p className="text-xs sm:text-sm text-white/60 mt-1">
+                  Available Funds
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={() => void manualRefresh()}
+              disabled={loading || !walletAddress}
+              className="vision-button px-3 py-2 sm:px-6 sm:py-3 text-xs sm:text-sm text-[rgb(182,255,62)] disabled:opacity-60 font-medium rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm flex-shrink-0"
+            >
+              {loading ? (
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 sm:w-4 sm:h-4 border-2 border-[rgb(182,255,62)]/30 border-t-[rgb(182,255,62)] rounded-full animate-spin" />
+                  <span className="hidden sm:inline">Refreshing…</span>
+                  <span className="sm:hidden">…</span>
+                </div>
+              ) : (
+                "Refresh"
+              )}
+            </button>
           </div>
 
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-2 sm:gap-3">
-                {loading ? (
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
-                    <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+              <div className="flex flex-col gap-3">
+                <div className="flex items-baseline justify-between gap-3">
+                  <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-1 min-w-0">
+                    {loading ? (
+                      <div className="flex items-center gap-3">
+                        <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
+                        <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+                      </div>
+                    ) : (
+                      <>
+                        <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
+                          {formatFiatNarrow(fiatValue, displayCurrency)}
+                        </span>
+                        <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end sm:pb-1 lg:pb-2">
+                          {displayCurrency.toLowerCase()}
+                        </span>
+                      </>
+                    )}
                   </div>
-                ) : (
-                  <>
-                    <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
-                      {formatFiatNarrow(savingsUsdc * fxRate, displayCurrency)}
-                    </span>
-                    <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:pb-1 lg:pb-2">
-                      {displayCurrency.toLowerCase()}
-                    </span>
-                  </>
-                )}
+                </div>
               </div>
-              <div className="text-xs text-white/60 mt-2">
-                {savingsUsdc.toLocaleString(undefined, {
-                  maximumFractionDigits: savingsUsdc < 1 ? 6 : 2,
-                })}{" "}
-                USDC
+            </div>
+
+            <div className="flex-shrink-0">
+              <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm">
+                <div className="text-right">
+                  <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
+                    {!apyLoading ? `APY ${formatPct(apyPct)}` : "APY …"}
+                  </div>
+                  <div className="text-xs text-white/40 opacity-0 group-hover:opacity-100 transition-all duration-200 mt-1">
+                    Current annual percentage yield
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -423,11 +574,13 @@ const SavingsAccount: React.FC = () => {
                 label="Deposit"
                 icon={<Download size={16} aria-hidden />}
                 onClick={openDepositModal}
+                disabled={!ready || !authenticated || loading}
               />
               <ActionButton
                 label="Withdraw"
                 icon={<Upload size={16} aria-hidden />}
                 onClick={openWithdrawModal}
+                disabled={!ready || !authenticated || loading}
               />
             </div>
           </div>
@@ -447,7 +600,7 @@ const SavingsAccount: React.FC = () => {
 
 export default SavingsAccount;
 
-/* ------------------------------- Sub-UI ---------------------------------- */
+/* ----------------------------- Sub-UI ----------------------------- */
 function ActionButton({
   label,
   icon,
@@ -588,9 +741,11 @@ function AmountModal({
 function OpenAccountModal({
   onClose,
   onSubmit,
+  apyPct,
 }: {
   onClose: () => void;
   onSubmit: (amountUi: number) => Promise<void>;
+  apyPct?: number | null;
 }) {
   const [mounted, setMounted] = useState(false);
   const [amount, setAmount] = useState<string>("");
@@ -643,6 +798,11 @@ function OpenAccountModal({
           <div className="p-4 sm:p-6">
             <p className="text-sm text-white/70 mb-4">
               Enter an initial USDC amount to fund your new savings account.
+              {apyPct && (
+                <span className="block mt-2 text-[rgb(182,255,62)] font-medium">
+                  Earn up to {formatPct(apyPct)} APY on your savings.
+                </span>
+              )}
             </p>
             <label className="block text-sm font-medium text-white/80 mb-2">
               Initial deposit (USDC)

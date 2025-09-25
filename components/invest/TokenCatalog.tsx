@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Image from "next/image";
-import { X } from "lucide-react";
+import { X, Search } from "lucide-react";
 import {
   type TokenMeta,
   tokensForCluster,
@@ -87,6 +87,11 @@ export default function TokenCatalog({
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState<
+    TokenCategory | "All"
+  >("All");
+
   // prefer app's deposit wallet -> user's primary wallet -> first Privy Solana wallet
   const depositOwnerBase58 = useMemo(() => {
     const u = user as unknown;
@@ -109,42 +114,46 @@ export default function TokenCatalog({
 
   // force mainnet token list
   const all = useMemo(() => tokensForCluster(MAINNET), []);
-  const filtered = useMemo(
-    () =>
-      categories?.length
-        ? all.filter((t) => t.category && categories.includes(t.category))
-        : all,
-    [all, categories]
-  );
+
+  const filtered = useMemo(() => {
+    let tokens = categories?.length
+      ? all.filter((t) => t.category && categories.includes(t.category))
+      : all;
+
+    // Apply category filter
+    if (selectedCategory !== "All") {
+      tokens = tokens.filter((t) => t.category === selectedCategory);
+    }
+
+    // Apply search filter
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase().trim();
+      tokens = tokens.filter(
+        (t) =>
+          t.name.toLowerCase().includes(query) ||
+          t.symbol.toLowerCase().includes(query)
+      );
+    }
+
+    return tokens;
+  }, [all, categories, selectedCategory, searchQuery]);
 
   const categoryOrder: TokenCategory[] = categories?.length
     ? categories
     : DEFAULT_CATEGORY_ORDER;
 
-  const grouped = useMemo(() => {
-    const map = new Map<TokenCategory, TokenMeta[]>();
-    for (const cat of categoryOrder) map.set(cat, []);
-    for (const t of filtered) {
-      if (!t.category || !map.has(t.category)) continue;
-      map.get(t.category)!.push(t);
-    }
-    return categoryOrder
-      .map((c) => [c, map.get(c)!] as const)
-      .filter(([, arr]) => arr.length > 0);
-  }, [filtered, categoryOrder]);
+  const displayTokens = useMemo(() => filtered, [filtered]);
 
   /* ------------------------------ live prices ------------------------------ */
 
   const priceIds = useMemo(() => {
     const s = new Set<string>();
-    for (const [, tokens] of grouped) {
-      for (const t of tokens) {
-        const id = getMintFor(t, MAINNET);
-        if (id) s.add(id);
-      }
+    for (const t of displayTokens) {
+      const id = getMintFor(t, MAINNET);
+      if (id) s.add(id);
     }
     return Array.from(s);
-  }, [grouped]);
+  }, [displayTokens]);
 
   const [prices, setPrices] = useState<JupPriceResponse>({});
   const [pricesLoading, setPricesLoading] = useState(false);
@@ -247,147 +256,201 @@ export default function TokenCatalog({
   /* -------------------------------- render -------------------------------- */
 
   return (
-    <div className={`vision-window ${className}`}>
-      
+    <div className={`min-h-screen bg-black/10 vision-perspective ${className}`}>
+      <header className="sticky top-0 z-10 bg-black/10 backdrop-blur-[40px] backdrop-saturate-[200%] border-b border-white/10">
+        <div className="container mx-auto px-4 py-4 sm:py-6">
+          <div className="max-w-md mx-auto mb-4 sm:mb-6">
+            <div className="relative group">
+              {/* Background glow effect */}
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700" />
 
-      <div className="p-4">
-        {!grouped.length ? (
+              <div className="relative vision-glass rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%]">
+                <Search className="absolute left-3 sm:left-4 top-1/2 transform -translate-y-1/2 text-white/60 w-4 h-4 sm:w-5 sm:h-5" />
+                <input
+                  type="text"
+                  placeholder="Search tokens..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 bg-transparent text-white placeholder-white/50 text-sm sm:text-base font-medium focus:outline-none focus:ring-0"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <div className="flex flex-wrap gap-1.5 sm:gap-2 p-1.5 sm:p-2 bg-white/5 backdrop-blur-sm rounded-2xl border border-white/10 max-w-full overflow-x-auto">
+              <button
+                onClick={() => setSelectedCategory("All")}
+                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all duration-300 whitespace-nowrap ${
+                  selectedCategory === "All"
+                    ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30 shadow-[0_0_20px_rgba(182,255,62,0.3)]"
+                    : "text-white/70 hover:bg-white/10 hover:text-white border border-transparent"
+                }`}
+              >
+                All
+              </button>
+              {categoryOrder.map((category) => (
+                <button
+                  key={category}
+                  onClick={() => setSelectedCategory(category)}
+                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all duration-300 whitespace-nowrap ${
+                    selectedCategory === category
+                      ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30 shadow-[0_0_20px_rgba(182,255,62,0.3)]"
+                      : "text-white/70 hover:bg-white/10 hover:text-white border border-transparent"
+                  }`}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main className="container mx-auto px-4 py-4 sm:py-6">
+        {!displayTokens.length ? (
           <div className="text-center py-12">
-            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-white/5 border border-white/10 flex items-center justify-center">
-              <div className="w-8 h-8 rounded-full bg-white/10" />
+            <div className="relative group mx-auto mb-6 w-16 h-16 sm:w-20 sm:h-20">
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50" />
+              <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 flex items-center justify-center">
+                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10" />
+              </div>
             </div>
-            <div className="text-white/70 mb-2 text-base font-medium">
-              No tokens available
+            <div className="text-white mb-2 text-lg sm:text-xl font-bold">
+              {searchQuery ? "No tokens found" : "No tokens available"}
             </div>
-            <div className="text-sm text-white/50 max-w-md mx-auto">
-              Add mints to{" "}
-              <code className="bg-white/10 px-2 py-1 rounded font-mono text-xs">
-                mints.mainnet
-              </code>{" "}
-              in{" "}
-              <code className="bg-white/10 px-2 py-1 rounded font-mono text-xs">
-                /lib/tokens.ts
-              </code>
+            <div className="text-white/60 text-sm max-w-md mx-auto">
+              {searchQuery
+                ? `No tokens match "${searchQuery}"`
+                : "Add mints to mints.mainnet in /lib/tokens.ts"}
             </div>
           </div>
         ) : (
-          <div className="space-y-6">
-            {grouped.map(([cat, tokens]) => (
-              <section key={cat}>
-                <div className="mb-4 flex items-center gap-3">
-                  <div className="h-1 w-6 bg-gradient-to-r from-[rgb(182,255,62)] to-transparent rounded-full" />
-                  <h4 className="text-sm font-bold tracking-wide text-white uppercase">
-                    {cat}
-                  </h4>
-                  <div className="flex-1 h-px bg-gradient-to-r from-white/20 to-transparent" />
-                </div>
+          <div className="space-y-3 sm:space-y-4">
+            {displayTokens.map((t) => {
+              const mainnetMint = getMintFor(t, MAINNET);
+              const p = mainnetMint ? prices[mainnetMint] : undefined;
+              const usd = p?.usdPrice;
+              const local = typeof usd === "number" ? usd * fxRate : undefined;
+              const change = p?.priceChange24h;
+              const changeStr = fmtChange(change);
+              const changeColor =
+                typeof change === "number"
+                  ? change > 0
+                    ? "text-[rgb(182,255,62)]"
+                    : change < 0
+                    ? "text-red-400"
+                    : "text-white/60"
+                  : "text-white/60";
 
-                <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {tokens.map((t) => {
-                    const mainnetMint = getMintFor(t, MAINNET);
-                    const p = mainnetMint ? prices[mainnetMint] : undefined;
-                    const usd = p?.usdPrice;
-                    const local =
-                      typeof usd === "number" ? usd * fxRate : undefined;
-                    const change = p?.priceChange24h;
-                    const changeStr = fmtChange(change);
-                    const changeColor =
-                      typeof change === "number"
-                        ? change > 0
-                          ? "text-[rgb(182,255,62)]"
-                          : change < 0
-                          ? "text-red-400"
-                          : "text-white/40"
-                        : "text-white/30";
+              const disabled =
+                !mainnetMint ||
+                !depositOwnerBase58 ||
+                !privyReady ||
+                !authenticated;
 
-                    const disabled =
-                      !mainnetMint ||
-                      !depositOwnerBase58 ||
-                      !privyReady ||
-                      !authenticated;
+              return (
+                <div
+                  key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
+                  className="relative group"
+                >
+                  {/* Background glow effect */}
+                  <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/10 via-transparent to-[rgb(182,255,62)]/10 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-                    return (
-                      <li
-                        key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
-                        className="vision-card group p-4 transition-all duration-300 hover:scale-[1.02]"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="relative">
-                            <Image
-                              src={
-                                t.logo ||
-                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                                "/placeholder.svg" ||
-                                "/placeholder.svg"
-                              }
-                              alt={`${t.name} logo`}
-                              width={40}
-                              height={40}
-                              className="h-10 w-10 rounded-full border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
-                            />
-                            {pricesLoading && (
-                              <div className="absolute -top-1 -right-1 h-3 w-3 bg-[rgb(182,255,62)] rounded-full animate-pulse" />
-                            )}
-                          </div>
+                  <div className="relative vision-window p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_16px_32px_rgba(0,0,0,0.3)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.4)] transition-all duration-500 transform-gpu hover:scale-[1.02]">
+                    {/* Subtle inner glow */}
+                    <div className="absolute inset-0 rounded-2xl sm:rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-white font-semibold truncate text-sm">
-                                {t.name}
-                              </span>
-                              <span className="text-xs text-white/50 font-medium px-1.5 py-0.5 bg-white/10 rounded">
+                    <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                      <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+                        <div className="relative flex-shrink-0">
+                          <Image
+                            src={
+                              t.logo ||
+                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                              "/placeholder.svg" ||
+                              "/placeholder.svg" ||
+                              "/placeholder.svg" ||
+                              "/placeholder.svg"
+                            }
+                            alt={`${t.name} logo`}
+                            width={48}
+                            height={48}
+                            className="h-10 w-10 sm:h-14 sm:w-14 rounded-xl sm:rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
+                          />
+                          {pricesLoading && (
+                            <div className="absolute -top-0.5 -right-0.5 sm:-top-1 sm:-right-1 h-3 w-3 sm:h-4 sm:w-4 bg-[rgb(182,255,62)] rounded-full animate-pulse shadow-[0_0_20px_rgba(182,255,62,0.6)]" />
+                          )}
+                        </div>
+
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
+                            <span className="text-white font-bold text-base sm:text-lg tracking-tight truncate">
+                              {t.name}
+                            </span>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs text-white/70 font-semibold px-2 sm:px-3 py-1 bg-white/10 backdrop-blur-sm rounded-lg border border-white/10">
                                 {t.symbol}
                               </span>
-                            </div>
-
-                            <div className="flex items-center gap-2 mb-3">
-                              <span className="text-white font-bold text-base">
-                                {fmtMoney(local)}
-                              </span>
-                              {changeStr && (
-                                <span
-                                  className={`text-xs font-medium ${changeColor} flex items-center gap-1`}
-                                >
-                                  {typeof change === "number" &&
-                                    change > 0 &&
-                                    "↗"}
-                                  {typeof change === "number" &&
-                                    change < 0 &&
-                                    "↘"}
-                                  {changeStr}
+                              {t.category && (
+                                <span className="text-xs text-[rgb(182,255,62)] font-medium px-2 py-1 bg-[rgb(182,255,62)]/10 rounded-lg">
+                                  {t.category}
                                 </span>
                               )}
                             </div>
+                          </div>
 
-                            <button
-                              type="button"
-                              onClick={() => openBuy(t)}
-                              disabled={disabled}
-                              className="vision-accent w-full text-xs px-3 py-2 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 group-hover:scale-[1.02]"
-                            >
-                              Buy {t.symbol}
-                            </button>
+                          <div className="flex items-center gap-3 sm:gap-4">
+                            <span className="text-white font-black text-xl sm:text-2xl bg-gradient-to-br from-white via-white to-white/80 bg-clip-text">
+                              {fmtMoney(local)}
+                            </span>
+                            {changeStr && (
+                              <span
+                                className={`text-xs sm:text-sm font-semibold ${changeColor} flex items-center gap-1`}
+                              >
+                                {typeof change === "number" &&
+                                  change > 0 &&
+                                  "↗"}
+                                {typeof change === "number" &&
+                                  change < 0 &&
+                                  "↘"}
+                                {changeStr}
+                              </span>
+                            )}
                           </div>
                         </div>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            ))}
-            {pricesError && (
-              <div className="text-center p-4 rounded-xl bg-red-500/10 border border-red-500/20 backdrop-blur-sm">
-                <div className="text-red-400 font-medium">
-                  Failed to fetch prices
+                      </div>
+
+                      <button
+                        onClick={() => openBuy(t)}
+                        disabled={disabled}
+                        className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-xl sm:rounded-2xl bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
+                      >
+                        {/* Enhanced shimmer effect on hover */}
+                        <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+
+                        <span className="relative z-10">Buy {t.symbol}</span>
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="text-red-400/70 text-sm mt-1">
-                  {pricesError}
-                </div>
-              </div>
-            )}
+              );
+            })}
           </div>
         )}
-      </div>
+
+        {pricesError && (
+          <div className="relative group mt-6">
+            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
+            <div className="relative text-center p-4 sm:p-6 rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm">
+              <div className="text-red-400 font-semibold text-base sm:text-lg">
+                Failed to fetch prices
+              </div>
+              <div className="text-red-400/70 text-sm mt-2">{pricesError}</div>
+            </div>
+          </div>
+        )}
+      </main>
 
       {/* Buy modal */}
       {modalOpen && selected && (
@@ -587,62 +650,78 @@ function BuyModal({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] vision-perspective flex items-center justify-center p-4"
       aria-modal="true"
       role="dialog"
     >
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-md"
+        className="absolute inset-0 bg-black/80 backdrop-blur-2xl backdrop-saturate-150"
         onClick={onClose}
+        aria-hidden
       />
-      <div className="vision-modal relative w-full max-w-lg rounded-2xl p-6">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
+      <div className="pointer-events-none absolute inset-0 -z-10">
+        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
+      </div>
+      <div className="pointer-events-auto w-full max-w-sm sm:max-w-lg vision-window vision-depth rounded-2xl sm:rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4)] p-4 sm:p-6 max-h-[90vh] overflow-y-auto">
+        {/* Subtle inner glow */}
+        <div className="absolute inset-0 rounded-2xl sm:rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
+
+        <div className="relative flex items-center justify-between mb-4 sm:mb-6">
+          <div className="flex items-center gap-2 sm:gap-3">
             <Image
               src={
                 token.logo ||
                 "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                "/placeholder.svg" ||
+                "/placeholder.svg" ||
                 "/placeholder.svg" ||
                 "/placeholder.svg"
               }
               alt={`${token.name} logo`}
               width={40}
               height={40}
-              className="h-10 w-10 rounded-xl border border-white/20 object-contain bg-white/5"
+              className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
             />
             <div>
-              <h4 className="text-white font-bold text-lg">Buy {token.name}</h4>
-              <div className="text-white/60 text-sm">{token.symbol}</div>
+              <h4 className="text-white font-bold text-lg sm:text-xl tracking-tight">
+                Buy {token.name}
+              </h4>
+              <div className="text-white/60 text-xs sm:text-sm font-medium">
+                {token.symbol}
+              </div>
             </div>
           </div>
           <button
-            aria-label="Close"
             onClick={onClose}
-            className="vision-button p-2 rounded-xl text-white/60 hover:text-white transition-colors"
+            className="vision-button rounded-xl sm:rounded-2xl p-2 sm:p-3 hover:bg-white/10 transition-all duration-300 text-white/70 hover:text-white"
+            aria-label="Close"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4 sm:w-5 sm:h-5" />
           </button>
         </div>
 
-        <div className="space-y-4">
+        <div className="relative space-y-4 sm:space-y-6">
           <div>
-            <label className="block text-sm font-semibold text-white/90 mb-2">
+            <label className="block text-sm font-bold text-white mb-2 sm:mb-3">
               Spend ({displayCurrency})
             </label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={amountStr}
-              onChange={(e) => setAmountStr(e.target.value)}
-              className="vision-input w-full rounded-xl px-4 py-3 text-white placeholder-white/40 focus:outline-none transition-all"
-              placeholder="0.00"
-              inputMode="decimal"
-            />
+            <div className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700" />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amountStr}
+                onChange={(e) => setAmountStr(e.target.value)}
+                className="relative w-full px-3 sm:px-4 py-3 sm:py-4 bg-white/5 backdrop-blur-sm border border-white/20 rounded-xl sm:rounded-2xl text-white text-base sm:text-lg font-semibold placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 transition-all duration-300"
+                placeholder="0.00"
+                inputMode="decimal"
+              />
+            </div>
 
-            <div className="text-sm text-white/50 mt-2">
+            <div className="text-xs sm:text-sm text-white/60 mt-2 sm:mt-3 font-medium">
               Processing fee:{" "}
-              <span className="text-white/80 font-medium">
+              <span className="text-white font-semibold">
                 {new Intl.NumberFormat(undefined, {
                   style: "currency",
                   currency: displayCurrency,
@@ -653,88 +732,107 @@ function BuyModal({
             </div>
           </div>
 
-          {/* Quote panel */}
-          <div className="vision-card rounded-xl p-4">
+          <div className="vision-glass rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/5 backdrop-blur-sm border border-white/10">
             {!spendValid ? (
-              <div className="text-center py-4">
-                <div className="text-red-400 font-medium">Invalid amount</div>
-                <div className="text-red-400/70 text-sm">
+              <div className="text-center py-4 sm:py-6">
+                <div className="text-red-400 font-semibold text-base sm:text-lg">
+                  Invalid amount
+                </div>
+                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
                   Enter an amount greater than the fee
                 </div>
               </div>
             ) : qLoading ? (
-              <div className="text-center py-4">
-                <div className="text-white/70">Getting live price...</div>
-                <div className="mt-2 h-1 bg-white/10 rounded-full overflow-hidden">
+              <div className="text-center py-4 sm:py-6">
+                <div className="text-white/70 font-medium text-sm sm:text-base">
+                  Getting live price...
+                </div>
+                <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
                   <div className="h-full bg-[rgb(182,255,62)] rounded-full animate-pulse w-1/2" />
                 </div>
               </div>
             ) : qError ? (
-              <div className="text-center py-4">
-                <div className="text-red-400 font-medium">
+              <div className="text-center py-4 sm:py-6">
+                <div className="text-red-400 font-semibold text-sm sm:text-base">
                   Price fetch failed
                 </div>
-                <div className="text-red-400/70 text-sm">{qError}</div>
+                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
+                  {qError}
+                </div>
               </div>
             ) : quote && outAmountUi != null ? (
-              <div className="space-y-3">
+              <div className="space-y-3 sm:space-y-4">
                 <div className="flex justify-between items-center">
-                  <span className="text-white/60">You&#39;ll receive:</span>
-                  <span className="text-white font-semibold text-lg">
+                  <span className="text-white/70 font-medium text-sm sm:text-base">
+                    You&apos;ll receive:
+                  </span>
+                  <span className="text-white font-bold text-lg sm:text-xl bg-gradient-to-br from-white via-white to-white/80 bg-clip-text">
                     {fmtToken(outAmountUi)} {token.symbol}
                   </span>
                 </div>
                 {quote.priceImpactPct && (
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-white/50">Price impact:</span>
-                    <span className="text-white/70">
+                  <div className="flex justify-between items-center text-xs sm:text-sm">
+                    <span className="text-white/60">Price impact:</span>
+                    <span className="text-white/70 font-medium">
                       {(Number(quote.priceImpactPct) * 100).toFixed(2)}%
                     </span>
                   </div>
                 )}
-                <div className="h-px bg-white/10" />
-                <div className="text-xs text-white/40 text-center">
+                <div className="h-px bg-white/20" />
+                <div className="text-xs text-white/50 text-center font-medium">
                   Live quote • Updates automatically
                 </div>
               </div>
             ) : (
-              <div className="text-center py-4 text-white/50">
+              <div className="text-center py-4 sm:py-6 text-white/60 font-medium text-sm sm:text-base">
                 Enter an amount to see a live price
               </div>
             )}
           </div>
 
-          {/* Purchase state */}
           {swapError && (
-            <div className="rounded-xl bg-red-500/10 border border-red-500/20 p-4">
-              <div className="text-red-400 font-medium">Purchase failed</div>
-              <div className="text-red-400/70 text-sm mt-1">{swapError}</div>
+            <div className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
+              <div className="relative rounded-xl sm:rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm p-3 sm:p-4">
+                <div className="text-red-400 font-semibold text-sm sm:text-base">
+                  Purchase failed
+                </div>
+                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
+                  {swapError}
+                </div>
+              </div>
             </div>
           )}
           {signature && (
-            <div className="rounded-xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/20 p-4">
-              <div className="text-[rgb(182,255,62)] font-medium">
-                Purchase submitted successfully!
+            <div className="relative group">
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-50" />
+              <div className="relative rounded-xl sm:rounded-2xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/30 backdrop-blur-sm p-3 sm:p-4">
+                <div className="text-[rgb(182,255,62)] font-semibold text-sm sm:text-base">
+                  Purchase submitted successfully!
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 mt-6 pt-4 border-t border-white/10">
+        <div className="relative flex flex-col sm:flex-row items-center justify-end gap-3 sm:gap-4 mt-6 sm:mt-8 pt-4 sm:pt-6 border-t border-white/10">
           <button
-            type="button"
             onClick={onClose}
-            className="vision-button px-6 py-2.5 text-sm rounded-xl text-white/80 hover:text-white transition-all duration-200"
+            className="vision-button w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 text-white/80 hover:text-white rounded-xl sm:rounded-2xl bg-white/5 border border-white/20 hover:bg-white/10 hover:border-white/30 transition-all duration-300 backdrop-blur-sm font-semibold text-sm sm:text-base"
           >
             Cancel
           </button>
           <button
-            type="button"
             disabled={!canSwap}
             onClick={onBuy}
-            className="vision-accent px-6 py-2.5 text-sm rounded-xl font-bold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+            className="group/btn relative overflow-hidden vision-button w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl sm:rounded-2xl bg-[rgb(182,255,62)]/20 border border-[rgb(182,255,62)]/40 hover:bg-[rgb(182,255,62)]/30 hover:border-[rgb(182,255,62)]/60 hover:shadow-[0_8px_32px_rgba(182,255,62,0.3)] transition-all duration-300 backdrop-blur-sm font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
           >
-            {swapping ? "Processing..." : `Buy ${token.symbol}`}
+            {/* Enhanced shimmer effect on hover */}
+            <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+
+            <span className="relative z-10">
+              {swapping ? "Processing..." : `Buy ${token.symbol}`}
+            </span>
           </button>
         </div>
       </div>
