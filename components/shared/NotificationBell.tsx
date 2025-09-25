@@ -1,7 +1,7 @@
 // components/notifications/NotificationBell.tsx
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bell } from "lucide-react";
 import { usePrivy } from "@privy-io/react-auth";
@@ -360,13 +360,13 @@ export default function NotificationBell({
         type="button"
         aria-label="Notifications"
         onClick={() => setOpen(true)}
-        className="relative inline-flex items-center justify-center rounded-full p-2 hover:bg-white/10 transition-colors"
+        className="vision-button relative inline-flex items-center justify-center rounded-full p-2.5 transition-all duration-300 hover:scale-105 "
       >
-        <Bell className="h-5 w-5 text-white/90" aria-hidden />
+        <Bell className="h-4 w-4 text-foreground/90" aria-hidden />
         {unseen > 0 && (
           <span
             aria-label={`${unseen} new notifications`}
-            className="absolute -top-0.5 -right-0.5 min-w-[18px] px-1 h-[18px] rounded-full bg-red-500 text-[10px] font-bold text-white flex items-center justify-center ring-2 ring-zinc-900"
+            className="absolute -top-1 -right-1 min-w-[20px] px-1.5 h-[20px] rounded-full bg-gradient-to-r from-red-500 to-red-600 text-[10px] font-bold text-white flex items-center justify-center ring-2 ring-background shadow-lg"
           >
             {unseen > 99 ? "99+" : unseen}
           </span>
@@ -379,52 +379,75 @@ export default function NotificationBell({
           <div
             aria-modal="true"
             role="dialog"
-            className="fixed inset-0 z-[9999] flex items-center justify-center"
+            className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
           >
             <div
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/70 backdrop-blur-md"
               onClick={() => setOpen(false)}
             />
             <div
-              className="relative w-full max-w-lg sm:max-w-xl lg:max-w-2xl mx-4 sm:mx-6 rounded-2xl border border-white/10 bg-zinc-900/95 backdrop-blur-xl shadow-2xl overflow-hidden"
+              className="vision-modal relative w-full max-w-md sm:max-w-lg lg:max-w-xl mx-auto rounded-2xl overflow-hidden transform transition-all duration-300 scale-100"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-white/10 bg-zinc-900/95">
-                <span className="text-sm font-semibold text-white/90">
-                  Notifications
-                </span>
+              <div className="vision-surface sticky top-0 z-10 flex items-center justify-between px-5 py-4 border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <Bell className="h-4 w-4 text-foreground/70" />
+                  <span className="text-base font-semibold text-foreground">
+                    Notifications
+                  </span>
+                  {unseen > 0 && (
+                    <span className="px-2 py-0.5 text-xs font-medium bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] rounded-full border border-[rgb(182,255,62)]/30">
+                      {unseen} new
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => void load()}
-                    className="text-[11px] px-2 py-1 rounded-md border border-white/10 hover:bg-white/10 text-white/70"
+                    className="vision-button text-xs px-3 py-1.5 rounded-lg text-foreground/80 hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
                     disabled={loading || marking}
                   >
                     {loading ? "Refreshing…" : "Refresh"}
                   </button>
                   <button
                     onClick={() => setOpen(false)}
-                    className="text-[11px] px-2 py-1 rounded-md border border-white/10 hover:bg-white/10 text-white/70"
+                    className="vision-button text-xs px-3 py-1.5 rounded-lg text-foreground/80 hover:text-foreground"
                   >
                     Close
                   </button>
                 </div>
               </div>
 
-              <div className="max-h-[85vh] overflow-auto">
+              <div className="vision-surface max-h-[70vh] sm:max-h-[75vh] overflow-auto">
                 {!authenticated ? (
-                  <div className="px-4 py-6 text-sm text-white/60">
-                    Please sign in to view notifications.
+                  <div className="px-5 py-8 text-center">
+                    <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-muted/20 flex items-center justify-center">
+                      <Bell className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Please sign in to view notifications.
+                    </p>
                   </div>
                 ) : lastError ? (
-                  <div className="px-4 py-6 text-sm text-red-400 break-words">
-                    Failed to load notifications.
+                  <div className="px-5 py-8 text-center">
+                    <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-destructive/20 flex items-center justify-center">
+                      <Bell className="h-6 w-6 text-destructive" />
+                    </div>
+                    <p className="text-sm text-destructive break-words">
+                      Failed to load notifications.
+                    </p>
                   </div>
                 ) : items.length === 0 && !loading ? (
-                  <div className="px-4 py-6 text-sm text-white/60">
-                    No notifications.
+                  <div className="px-5 py-8 text-center">
+                    <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-muted/20 flex items-center justify-center">
+                      <Bell className="h-6 w-6 text-muted-foreground" />
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      No notifications yet.
+                    </p>
                   </div>
                 ) : (
-                  <ul className="divide-y divide-white/10">
+                  <ul className="divide-y divide-white/5">
                     {items.map((n) => {
                       const content = renderMessage(n);
                       const isTransfer =
@@ -434,32 +457,41 @@ export default function NotificationBell({
                       return (
                         <li
                           key={n._id}
-                          className={`px-4 py-3 text-sm ${
-                            n.seen ? "bg-transparent" : "bg-[rgb(182,255,62)]/5"
+                          className={`px-5 py-4 transition-all duration-200 hover:bg-white/5 ${
+                            n.seen
+                              ? "bg-transparent"
+                              : "bg-[rgb(182,255,62)]/8 border-l-2 border-[rgb(182,255,62)]/50"
                           }`}
                         >
-                          <div className="flex items-start gap-2">
-                            <span
-                              className={`mt-1 h-2 w-2 rounded-full flex-shrink-0 ${
-                                n.seen
-                                  ? "bg-zinc-500/40"
-                                  : "bg-[rgb(182,255,62)]"
-                              }`}
-                            />
-                            <div className="min-w-0">
-                              <p className="text-white/90 break-words">
+                          <div className="flex items-start gap-3">
+                            <div className="flex-shrink-0 mt-1">
+                              <span
+                                className={`block h-2.5 w-2.5 rounded-full ${
+                                  n.seen
+                                    ? "bg-muted-foreground/40"
+                                    : "bg-[rgb(182,255,62)] shadow-lg shadow-[rgb(182,255,62)]/30"
+                                }`}
+                              />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-foreground leading-relaxed">
                                 {content.line1}
                               </p>
                               {isTransfer && content.from && (
-                                <p className="mt-0.5 text-[12px] text-white/70">
+                                <p className="mt-1 text-xs text-muted-foreground">
                                   {content.from}
                                 </p>
                               )}
-                              <div className="mt-1 text-[11px] text-white/45">
-                                {timeAgo(n.createdAt)} ago
-                                {fxLoading && targetCurrency !== "USD"
-                                  ? " · updating rates…"
-                                  : null}
+                              <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                                <span>{timeAgo(n.createdAt)} ago</span>
+                                {fxLoading && targetCurrency !== "USD" && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="text-[rgb(182,255,62)]/70">
+                                      updating rates…
+                                    </span>
+                                  </>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -467,8 +499,11 @@ export default function NotificationBell({
                       );
                     })}
                     {loading && (
-                      <li className="px-4 py-3 text-sm text-white/60">
-                        Loading…
+                      <li className="px-5 py-4 text-center">
+                        <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <div className="w-4 h-4 border-2 border-[rgb(182,255,62)]/30 border-t-[rgb(182,255,62)] rounded-full animate-spin"></div>
+                          Loading notifications…
+                        </div>
                       </li>
                     )}
                   </ul>
