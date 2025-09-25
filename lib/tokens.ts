@@ -202,6 +202,54 @@ export const TOKENS: TokenMeta[] = [
       // devnet: "<devnet-SPY-mint>",
     },
   },
+  {
+    name: "Meta",
+    symbol: "META",
+    id: "metax",
+    logo: "/logos/meta.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Coinbase",
+    symbol: "COIN",
+    id: "coinx",
+    logo: "/logos/coin.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Robinhood",
+    symbol: "HOOD",
+    id: "hoodx",
+    logo: "/logos/hood.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
+  {
+    name: "Amazon",
+    symbol: "AMZN",
+    id: "amznx",
+    logo: "/logos/amzn.webp",
+    category: "Stocks",
+    decimals: 8,
+    mints: {
+      mainnet: "Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg",
+      // devnet: "<devnet-SPY-mint>",
+    },
+  },
 ];
 
 export const CRYPTO_FLAT_FEE_USDC_UI: number = (() => {

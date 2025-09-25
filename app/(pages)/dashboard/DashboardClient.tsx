@@ -1,4 +1,3 @@
-// app/(pages)/dashboard/DashboardClient.tsx — Client Component
 "use client";
 
 import nextDynamic from "next/dynamic";
@@ -22,7 +21,6 @@ function DepositSkeleton() {
   );
 }
 
-// Do the dynamic loading here (client-only), so `ssr: false` is allowed
 const Hero = nextDynamic(() => import("@/components/dash/Hero"), {
   ssr: false,
   loading: () => <HeroSkeleton />,
@@ -36,12 +34,21 @@ const DepositAccount = nextDynamic(
   }
 );
 
+const SavingsAccount = nextDynamic(
+  () => import("@/components/dash/SavingsAccountCard"),
+  {
+    ssr: false,
+    loading: () => <DepositSkeleton />,
+  }
+);
+
 export default function DashboardClient() {
   return (
     <main className="py-3 px-4">
       <Hero />
-      <div className="mt-3">
+      <div className="mt-2 space-y-8">
         <DepositAccount />
+        <SavingsAccount />
       </div>
     </main>
   );
