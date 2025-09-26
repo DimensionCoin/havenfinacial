@@ -531,7 +531,7 @@ const SavingsAccount: React.FC = () => {
             </button>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-3 sm:mb-6">
+          <div className="flex px-2  sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
               <div className="flex flex-col gap-3">
                 <div className="flex items-baseline justify-between gap-3">
@@ -556,13 +556,13 @@ const SavingsAccount: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex-shrink-0">
+            <div className="">
               <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm">
                 <div className="text-right">
                   <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
                     {!apyLoading ? `APY ${formatPct(apyPct)}` : "APY …"}
                   </div>
-                  <div className="text-xs text-white/40 opacity-0 group-hover:opacity-100 transition-all duration-200 mt-1">
+                  <div className="hidden sm:block text-xs text-white/40 opacity-0 group-hover:opacity-100 transition-all duration-200 mt-1">
                     Current annual percentage yield
                   </div>
                 </div>
