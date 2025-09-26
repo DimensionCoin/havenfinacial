@@ -1,7 +1,7 @@
 // app/(wherever)/WalletHoldings.tsx
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import { RefreshCw, X } from "lucide-react";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -48,19 +48,17 @@ const EXCLUDED_MINTS = new Set<string>([
 
 type PriceResp = Record<
   string,
-  { usdPrice: number; decimals: number; priceChange24h?: number }
+  { usdPrice: number; decimals?: number; priceChange24h?: number }
 >;
 
-type Holding = {
-  mint: string; // current cluster mint
-  amountUi: number; // human units
-};
-
 type ViewRow = {
-  token: TokenMeta; // from catalog
-  amount: number;
-  priceUsd: number; // price per unit in USD
-  valueUsd: number; // amount * priceUsd
+  token: TokenMeta;
+  amount: number;            // for math/display
+  amountFullStr: string;     // exact UI units for "Max" (no trimming)
+  decimals: number;          // mint decimals
+  rawStr: string;            // raw base units as string
+  priceUsd: number;
+  valueUsd: number;
 };
 
 /* -------------------------------- utils ---------------------------------- */
@@ -79,6 +77,28 @@ function fmtMoneyWithoutCurrency(v: number) {
   } catch {
     return v.toFixed(2);
   }
+}
+
+/** raw (bigint) → exact UI string with `decimals` (no trimming) */
+function uiStringFromRaw(raw: bigint, decimals: number): string {
+  const s = raw.toString();
+  if (decimals <= 0) return s;
+  const split = s.length - decimals;
+  if (split <= 0) return `0.${"0".repeat(-split)}${s}`;
+  return `${s.slice(0, split)}.${s.slice(split)}`;
+}
+
+/** UI string → raw bigint for precise compare (no ES2020 bigint literals used) */
+function rawFromUiString(value: string, decimals: number): bigint {
+  const TEN = BigInt(10);
+  const ZERO = BigInt(0);
+  if (!value || !/^\d*(?:\.\d*)?$/.test(value)) return ZERO;
+  const [whole = "", frac = ""] = value.split(".");
+  const fracPadded = (frac || "").padEnd(decimals, "0").slice(0, decimals);
+  const wholeBI = whole ? BigInt(whole) : ZERO;
+  const fracBI = fracPadded ? BigInt(fracPadded) : ZERO;
+  const scale = TEN ** BigInt(decimals);
+  return wholeBI * scale + fracBI;
 }
 
 async function fetchUsdPrices(ids: string[]): Promise<PriceResp> {
@@ -109,10 +129,8 @@ export default function WalletHoldings({
   const owner58 = user?.depositWallet?.address || null;
   const cluster = getCluster();
 
-  // Supported tokens for this cluster (from catalog)
   const supportedTokens = useMemo(() => tokensForCluster(cluster), [cluster]);
 
-  // Index by current-cluster mint for quick lookups (strictly from tokens.ts)
   const byClusterMint = useMemo(() => {
     const map = new Map<string, TokenMeta>();
     for (const t of supportedTokens) {
@@ -122,7 +140,6 @@ export default function WalletHoldings({
     return map;
   }, [supportedTokens, cluster]);
 
-  // Map to mainnet mints (for price API)
   const mainnetMintFor = useCallback(
     (t: TokenMeta) => getMintFor(t, "mainnet"),
     []
@@ -136,27 +153,10 @@ export default function WalletHoldings({
 
   const [sellOpen, setSellOpen] = useState(false);
   const [sellRow, setSellRow] = useState<ViewRow | null>(null);
-  const [sellDecimals, setSellDecimals] = useState<number>(6);
 
-  const openSell = useCallback(async (row: ViewRow) => {
+  const openSell = useCallback((row: ViewRow) => {
     setSellRow(row);
     setSellOpen(true);
-    // Try to fetch decimals via JUP price endpoint using mainnet mint
-    try {
-      const mainnetMint = getMintFor(row.token, "mainnet");
-      if (mainnetMint) {
-        const r = await fetch(`${JUP_PRICE_BASE}?ids=${mainnetMint}`, {
-          cache: "no-store",
-        });
-        const j = (await r.json()) as PriceResp;
-        const d = j?.[mainnetMint]?.decimals ?? 6;
-        setSellDecimals(d);
-      } else {
-        setSellDecimals(6);
-      }
-    } catch {
-      setSellDecimals(6);
-    }
   }, []);
 
   const closeSell = () => {
@@ -164,7 +164,6 @@ export default function WalletHoldings({
     setSellRow(null);
   };
 
-  // Fetch USD→display FX (authorized)
   const refreshFx = useCallback(async () => {
     if (currency === "USD") {
       setFxRate(1);
@@ -202,7 +201,6 @@ export default function WalletHoldings({
       const conn = new Connection(RPC, "confirmed");
       const owner = new PublicKey(owner58);
 
-      // SPL balances **only** (strictly tokens present in tokens.ts)
       const [tokStd, tok22] = await Promise.all([
         conn.getParsedTokenAccountsByOwner(owner, {
           programId: TOKEN_PROGRAM_ID,
@@ -214,64 +212,93 @@ export default function WalletHoldings({
 
       type ParsedTokenInfo = {
         mint?: string;
-        tokenAmount?: { uiAmount?: number };
+        tokenAmount?: {
+          amount?: string;
+          decimals?: number;
+          uiAmountString?: string;
+          uiAmount?: number;
+        };
       };
 
-      const holdings: Holding[] = [];
+      const ZERO = BigInt(0);
+      const TEN = BigInt(10);
+
+      const accTotals = new Map<string, { raw: bigint; decimals: number }>();
+
       const addTokenAccounts = (accs: typeof tokStd) => {
         for (const it of accs.value) {
           const info = (
             it.account.data.parsed as { info?: ParsedTokenInfo } | undefined
           )?.info;
-          const mint: string | undefined = info?.mint;
-          const amountUi: number | undefined = Number(
-            info?.tokenAmount?.uiAmount ?? 0
-          );
-          if (!mint || !amountUi || amountUi <= 0) continue;
-          // keep **only** mints defined in tokens.ts for this cluster
+          const mint = info?.mint;
+          if (!mint) continue;
           if (!byClusterMint.has(mint)) continue;
-          // exclude USDC mints from display (portfolio of investable tokens only)
           if (EXCLUDED_MINTS.has(mint)) continue;
-          holdings.push({ mint, amountUi });
+
+          const amtStr = info?.tokenAmount?.amount ?? "0";
+          const decimals = Number(info?.tokenAmount?.decimals ?? 0);
+          let raw: bigint;
+          try {
+            raw = BigInt(amtStr);
+          } catch {
+            raw = ZERO;
+          }
+          if (raw <= ZERO) continue;
+
+          const prev = accTotals.get(mint);
+          if (!prev) {
+            accTotals.set(mint, { raw, decimals });
+          } else if (prev.decimals === decimals) {
+            accTotals.set(mint, { raw: prev.raw + raw, decimals });
+          } else {
+            const d = Math.max(prev.decimals, decimals);
+            const scalePrev =
+              prev.decimals === d ? BigInt(1) : TEN ** BigInt(d - prev.decimals);
+            const scaleNew =
+              decimals === d ? BigInt(1) : TEN ** BigInt(d - decimals);
+            accTotals.set(mint, {
+              raw: prev.raw * scalePrev + raw * scaleNew,
+              decimals: d,
+            });
+          }
         }
       };
+
       addTokenAccounts(tokStd);
       addTokenAccounts(tok22);
 
-      // Consolidate per mint
-      const byMint = new Map<string, number>();
-      for (const h of holdings) {
-        byMint.set(h.mint, (byMint.get(h.mint) || 0) + h.amountUi);
-      }
-
-      // Tokens the user actually holds (>0), restricted to tokens.ts
-      const heldTokens: TokenMeta[] = [];
-      for (const [mint, amount] of byMint.entries()) {
-        if (!amount || amount <= 0) continue;
+      const held: Array<{
+        token: TokenMeta;
+        mint: string;
+        raw: bigint;
+        decimals: number;
+      }> = [];
+      for (const [mint, { raw, decimals }] of accTotals.entries()) {
+        if (raw <= ZERO) continue;
         const token = byClusterMint.get(mint);
-        if (token) heldTokens.push(token);
+        if (token) held.push({ token, mint, raw, decimals });
       }
 
-      if (heldTokens.length === 0) {
+      if (held.length === 0) {
         setRows([]);
         setUpdatedAt(Date.now());
         setLoading(false);
         return;
       }
 
-      // USD prices using **mainnet** mints
-      const priceIds = heldTokens
-        .map((t) => mainnetMintFor(t))
+      const priceIds = held
+        .map(({ token }) => mainnetMintFor(token))
         .filter((m): m is string => !!m);
       const prices = await fetchUsdPrices(Array.from(new Set(priceIds)));
 
-      // Build rows in USD (hide < $0.01)
       const rowsUsd: ViewRow[] = [];
-      for (const t of heldTokens) {
-        const clusterMint = getMintFor(t, cluster)!;
-        const amount = byMint.get(clusterMint) || 0;
+      for (const { token, raw, decimals } of held) {
+        const amountFullStr = uiStringFromRaw(raw, decimals);
+        const amount = Number.parseFloat(
+          decimals > 0 ? amountFullStr : raw.toString()
+        );
 
-        const mainnetMint = mainnetMintFor(t);
+        const mainnetMint = mainnetMintFor(token);
         const p = mainnetMint ? prices[mainnetMint] : undefined;
         if (!p) continue;
 
@@ -279,7 +306,15 @@ export default function WalletHoldings({
         const valueUsd = amount * priceUsd;
         if (valueUsd < 0.01) continue;
 
-        rowsUsd.push({ token: t, amount, priceUsd, valueUsd });
+        rowsUsd.push({
+          token,
+          amount,
+          amountFullStr,
+          decimals,
+          rawStr: raw.toString(),
+          priceUsd,
+          valueUsd,
+        });
       }
 
       rowsUsd.sort((a, b) => b.valueUsd - a.valueUsd);
@@ -294,7 +329,6 @@ export default function WalletHoldings({
     }
   }, [owner58, byClusterMint, mainnetMintFor, cluster]);
 
-  // Load FX then balances
   useEffect(() => {
     (async () => {
       await refreshFx();
@@ -302,7 +336,6 @@ export default function WalletHoldings({
     })();
   }, [refreshFx, refresh]);
 
-  // Manual refresh
   const onRefreshClick = async () => {
     await refreshFx();
     await refresh();
@@ -312,7 +345,6 @@ export default function WalletHoldings({
     () => rows.reduce((s, r) => s + r.valueUsd, 0) * fxRate,
     [rows, fxRate]
   );
-
   const lastUpdated =
     updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString();
 
@@ -320,7 +352,6 @@ export default function WalletHoldings({
     <div className={`min-h-screen bg-black/10 vision-perspective ${className}`}>
       <header className="sticky top-0 z-10  backdrop-blur-[40px]  border-b border-white/10 ">
         <div className="container mx-auto px-2 py-2">
-          {/* Compact total balance section */}
           <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-xl font-bold text-white">Portfolio</h1>
@@ -337,7 +368,6 @@ export default function WalletHoldings({
             </button>
           </div>
 
-          {/* Small total balance display */}
           <div className="text-center py-">
             <div className="text-2xl font-bold text-white mb-1">
               {fmtMoneyWithoutCurrency(totalLocal)} {currency}
@@ -351,7 +381,7 @@ export default function WalletHoldings({
         {!owner58 ? (
           <div className="text-center py-12">
             <div className="relative group mx-auto mb-6 w-16 h-16">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50" />
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50 pointer-events-none" />
               <div className="relative w-16 h-16 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 flex items-center justify-center">
                 <div className="w-8 h-8 rounded-full bg-white/10" />
               </div>
@@ -360,27 +390,27 @@ export default function WalletHoldings({
               Wallet Not Ready
             </div>
             <div className="text-white/60 text-sm max-w-md mx-auto">
-              Your investment account isn&apos;t ready yet. Please finish onboarding
-              to view your portfolio.
+              Your investment account isn&apos;t ready yet. Please finish
+              onboarding to view your portfolio.
             </div>
           </div>
         ) : error ? (
           <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
+            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50 pointer-events-none" />
             <div className="relative text-center p-6 rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm">
               <div className="text-red-400 font-semibold text-lg">
                 Connection Error
               </div>
               <div className="text-red-400/70 text-sm mt-2">
-                Couldn&apos;t load your investments. Please check your connection and
-                try again.
+                Couldn&apos;t load your investments. Please check your
+                connection and try again.
               </div>
             </div>
           </div>
         ) : rows.length === 0 && !loading ? (
           <div className="text-center py-12">
             <div className="relative group mx-auto mb-6 w-16 h-16">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50" />
+              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50 pointer-events-none" />
               <div className="relative w-16 h-16 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 flex items-center justify-center">
                 <div className="w-8 h-8 rounded-full bg-white/10" />
               </div>
@@ -397,7 +427,7 @@ export default function WalletHoldings({
               onClick={onRefreshClick}
               className="group relative overflow-hidden rounded-2xl bg-[rgb(182,255,62)] text-black px-6 py-3 font-bold text-sm hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] hover:shadow-[0_12px_48px_rgba(182,255,62,0.4)] transform hover:scale-[1.02] active:scale-[0.98]"
             >
-              <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+              <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
               <div className="relative flex items-center justify-center gap-2">
                 <RefreshCw
                   className={`h-4 w-4 ${loading ? "animate-spin" : ""}`}
@@ -419,7 +449,7 @@ export default function WalletHoldings({
                   className="relative group"
                 >
                   {/* Subtle hover effect */}
-                  <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500" />
+                  <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none" />
 
                   <div className="relative p-4 rounded-2xl border border-white/10 bg-black/20 backdrop-blur-[20px] backdrop-saturate-[150%] hover:bg-black/30 hover:border-white/20 transition-all duration-300">
                     <div className="flex items-center justify-between">
@@ -430,7 +460,6 @@ export default function WalletHoldings({
                             src={
                               row.token.logo ||
                               "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                              "/placeholder.svg" ||
                               "/placeholder.svg"
                             }
                             alt={`${row.token.name} logo`}
@@ -448,7 +477,10 @@ export default function WalletHoldings({
                           </div>
                           <div className="text-white/60 text-sm">
                             {row.amount.toLocaleString(undefined, {
-                              maximumFractionDigits: row.amount < 1 ? 4 : 2,
+                              maximumFractionDigits:
+                                row.amount < 1
+                                  ? Math.min(row.decimals, 8)
+                                  : Math.min(row.decimals, 4),
                             })}{" "}
                             {row.token.symbol}
                           </div>
@@ -466,7 +498,7 @@ export default function WalletHoldings({
                         <button
                           type="button"
                           onClick={() => openSell(row)}
-                          className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-full bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
+                          className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-lg bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
                         >
                           Sell
                         </button>
@@ -479,7 +511,7 @@ export default function WalletHoldings({
 
             {loading && (
               <div className="relative group">
-                <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-50" />
+                <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-50 pointer-events-none" />
                 <div className="relative p-4 rounded-2xl border border-white/10 bg-black/20 backdrop-blur-[20px] backdrop-saturate-[150%]">
                   <div className="flex items-center gap-3">
                     <div className="h-10 w-10 rounded-full bg-white/10 animate-pulse" />
@@ -519,8 +551,8 @@ export default function WalletHoldings({
               onClose={closeSell}
               owner58={owner58}
               row={sellRow}
-              inputDecimals={sellDecimals}
               getAccessToken={getAccessToken}
+              maxAmountStr={sellRow.amountFullStr}
             />
           </div>
         </div>
@@ -535,79 +567,91 @@ function SellModal({
   onClose,
   owner58,
   row,
-  inputDecimals,
   getAccessToken,
+  maxAmountStr,
 }: {
   onClose: () => void;
   owner58: string;
   row: ViewRow;
-  inputDecimals: number;
   getAccessToken: () => Promise<string | null>;
+  maxAmountStr: string;
 }) {
   const { sell, loading, signature, error } = useServerSponsoredJupSell();
   const [amountStr, setAmountStr] = useState<string>("");
 
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
   const cluster = getCluster();
   const inputMint = getMintFor(row.token, cluster);
-  const maxAmount = row.amount;
+  const decimals = row.decimals;
 
-  const onMax = () => setAmountStr(String(maxAmount));
+  // Fill with exact max and force the DOM input to reflect immediately
+  const onMax = () => {
+    setAmountStr(maxAmountStr);
+    if (inputRef.current) inputRef.current.value = maxAmountStr;
+  };
+
+  // convert to raw for precise comparison
+  const inputRaw = useMemo(
+    () => rawFromUiString(amountStr, decimals),
+    [amountStr, decimals]
+  );
+  const maxRaw = useMemo(() => {
+    try {
+      return BigInt(row.rawStr);
+    } catch {
+      return BigInt(0);
+    }
+  }, [row.rawStr]);
 
   const canSell =
-    !!inputMint &&
-    Number.isFinite(Number(amountStr)) &&
-    Number(amountStr) > 0 &&
-    Number(amountStr) <= maxAmount &&
-    !loading;
+    !!inputMint && inputRaw > BigInt(0) && inputRaw <= maxRaw && !loading;
 
   const onConfirm = useCallback(async () => {
     if (!canSell) return;
-
     const toastId = toast.loading(`Selling ${row.token.symbol}…`);
-
     try {
       const bearer = await getAccessToken().catch(() => null);
       const res = await sell({
         fromOwnerBase58: owner58,
         inputMint,
         amountUi: Number(amountStr),
-        inputDecimals,
+        inputDecimals: decimals,
         accessToken: bearer,
         slippageBps: 50,
       });
-
-      // Prefer returned signature; fall back to hook state
       const sigFromCall = res as string | null;
       const sig = sigFromCall || signature;
       const short =
         sig && typeof sig === "string"
           ? ` • ${sig.slice(0, 6)}…${sig.slice(-6)}`
           : "";
-
       toast.success(`Sell submitted${short}`, { id: toastId });
       onClose();
-
-      // small refresh to reflect new balances
       setTimeout(() => {
         if (typeof window !== "undefined") window.location.reload();
       }, 250);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Sell failed";
       toast.error(msg, { id: toastId });
-      // UI error banner still renders below via `error`
     }
   }, [
     canSell,
     owner58,
     inputMint,
     amountStr,
-    inputDecimals,
+    decimals,
     getAccessToken,
     sell,
     onClose,
     row.token.symbol,
     signature,
   ]);
+
+  // Allow only valid decimals while typing (programmatic Max bypasses this)
+  const onChangeStrict = (v: string) => {
+    if (v === "" || /^\d*(?:\.\d*)?$/.test(v)) setAmountStr(v);
+  };
 
   return (
     <div className="relative">
@@ -617,7 +661,6 @@ function SellModal({
             src={
               row.token.logo ||
               "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-              "/placeholder.svg" ||
               "/placeholder.svg"
             }
             alt={`${row.token.name} logo`}
@@ -638,6 +681,7 @@ function SellModal({
           onClick={onClose}
           className="vision-button rounded-2xl p-3 hover:bg-white/10 transition-all duration-300 text-white/70 hover:text-white"
           aria-label="Close"
+          type="button"
         >
           <X className="w-5 h-5" />
         </button>
@@ -647,7 +691,10 @@ function SellModal({
         <div className="text-white/60 text-sm mb-3">
           Balance:{" "}
           {row.amount.toLocaleString(undefined, {
-            maximumFractionDigits: row.amount < 1 ? 6 : 4,
+            maximumFractionDigits:
+              row.amount < 1
+                ? Math.min(row.decimals, 8)
+                : Math.min(row.decimals, 4),
           })}{" "}
           {row.token.symbol}
         </div>
@@ -657,25 +704,29 @@ function SellModal({
             Amount to sell ({row.token.symbol})
           </label>
           <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700" />
-            <div className="flex gap-2">
+            {/* Decorative glow — must not block clicks */}
+            <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700 pointer-events-none" />
+            <div className="flex gap-2 relative z-10">
               <input
-                type="number"
-                min="0"
-                step="any"
-                value={amountStr}
-                onChange={(e) => setAmountStr(e.target.value)}
-                className="relative flex-1 px-4 py-4 bg-white/5 backdrop-blur-sm border border-white/20 rounded-2xl text-white text-lg font-semibold placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 transition-all duration-300"
-                placeholder="0.0"
+                ref={inputRef}
+                type="text"
                 inputMode="decimal"
+                value={amountStr}
+                onChange={(e) => onChangeStrict(e.target.value)}
+                placeholder="0.0"
+                className="relative flex-1 px-4 py-4 bg-white/5 backdrop-blur-sm border border-white/20 rounded-2xl text-white text-lg font-semibold placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 transition-all duration-300"
               />
               <button
                 type="button"
                 onClick={onMax}
-                className="px-4 py-2 rounded-2xl border border-white/20 text-white/80 hover:bg-white/10 font-semibold"
+                aria-label="Fill max amount"
+                className="px-4 py-2 rounded-2xl border border-white/20 text-white/90 hover:bg-white/10 font-semibold focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)] focus:ring-offset-0"
               >
                 Max
               </button>
+            </div>
+            <div className="mt-2 text-xs text-white/40 relative z-10">
+              Max: {maxAmountStr} {row.token.symbol}
             </div>
           </div>
         </div>
@@ -687,7 +738,7 @@ function SellModal({
 
         {error && (
           <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
+            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50 pointer-events-none" />
             <div className="relative rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm p-4">
               <div className="text-red-400 font-semibold">Sell failed</div>
               <div className="text-red-400/70 text-sm mt-1">{error}</div>
@@ -697,7 +748,7 @@ function SellModal({
 
         {signature && (
           <div className="relative group">
-            <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-50" />
+            <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-50 pointer-events-none" />
             <div className="relative rounded-2xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/30 backdrop-blur-sm p-4">
               <div className="text-[rgb(182,255,62)] font-semibold">
                 Sell submitted successfully!
@@ -712,17 +763,19 @@ function SellModal({
 
       <div className="relative flex items-center justify-end gap-4 mt-8 pt-6 border-t border-white/10">
         <button
+          type="button"
           onClick={onClose}
           className="vision-button px-6 py-3 text-white/80 hover:text-white rounded-2xl bg-white/5 border border-white/20 hover:bg-white/10 hover:border-white/30 transition-all duration-300 backdrop-blur-sm font-semibold"
         >
           Cancel
         </button>
         <button
+          type="button"
           disabled={!canSell}
           onClick={onConfirm}
           className="group/btn relative overflow-hidden vision-button px-6 py-3 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl bg-red-500/20 border border-red-500/40 hover:bg-red-500/30 hover:border-red-500/60 hover:shadow-[0_8px_32px_rgba(239,68,68,0.3)] transition-all duration-300 backdrop-blur-sm font-bold text-red-400"
         >
-          <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+          <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent pointer-events-none" />
           <span className="relative z-10">
             {loading ? "Selling..." : `Sell ${row.token.symbol}`}
           </span>

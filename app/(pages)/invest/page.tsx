@@ -13,25 +13,7 @@ export default function InvestmentApp() {
 
   return (
     <div className="min-h-screen bg-black/20">
-      {/* Professional Header */}
-      <header className="professional-header">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            {/* Logo and Brand */}
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-  
-                <h1 className="text-xl font-bold bg-gradient-to-r from-white to-white/80 bg-clip-text text-transparent">
-                  Haven Investments
-                </h1>
-              </div>
-            </div>
-
-
-            
-          </div>
-        </div>
-      </header>
+      
 
       {/* Tab Navigation */}
       <div className="bg-black/40 backdrop-blur-[40px] border-b border-white/10">
@@ -59,7 +41,7 @@ export default function InvestmentApp() {
               }`}
             >
               <ShoppingCart className="h-4 w-4" />
-              <span>Discover Tokens</span>
+              <span>Purchase Assets</span>
             </Button>
           </nav>
         </div>
@@ -75,15 +57,7 @@ export default function InvestmentApp() {
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-white/80 bg-clip-text text-transparent">
-                  Discover Tokens
-                </h2>
-                <div className="flex items-center space-x-2 text-sm text-white/60">
-                  <div className="w-2 h-2 bg-[rgb(182,255,62)] rounded-full animate-pulse"></div>
-                  <span>Real-time data</span>
-                </div>
-              </div>
+              
               <TokenCatalog />
             </div>
           )}
