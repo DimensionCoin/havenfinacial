@@ -70,15 +70,7 @@ export default function InvestmentApp() {
         <div className="space-y-8">
           {activeTab === "portfolio" ? (
             <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-white/80 bg-clip-text text-transparent">
-                  Portfolio Overview
-                </h2>
-                <div className="flex items-center space-x-2 text-sm text-white/60">
-                  <div className="w-2 h-2 bg-[rgb(182,255,62)] rounded-full animate-pulse"></div>
-                  <span>Live prices</span>
-                </div>
-              </div>
+              
               <WalletHoldings />
             </div>
           ) : (

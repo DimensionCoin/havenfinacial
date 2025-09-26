@@ -11,7 +11,7 @@ import { useUser } from "@/providers/UserProvider";
 import type { VersionedTransaction } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
-import { useSavingsActions } from "@/hooks/useSavingsActions"; // <-- uses deposit + withdraw
+import { useSavingsActions } from "@/hooks/useSavingsActions"; // deposit + withdraw
 
 // Ensure Buffer exists in the browser
 if (typeof window !== "undefined") {
@@ -23,13 +23,12 @@ if (typeof window !== "undefined") {
 type FxResponse = {
   base: "USD";
   target: string;
-  rate: number;
+  rate: number; // USD -> target
   amount: number;
   converted: number;
   asOf?: string | null;
 };
 
-// NOTE: API returns { apy: number } (decimal), not supplyApyPct
 type ApyApiResponse = {
   apy?: number; // e.g. 0.0874 for 8.74%
   error?: string;
@@ -85,14 +84,14 @@ const SavingsAccount: React.FC = () => {
   const { ready, authenticated, getAccessToken } = usePrivy();
   const { wallets: solWallets } = useSolanaWallets();
 
-  // First-time "open & deposit" hook (kept)
+  // First-time "open & deposit"
   const {
     deposit: openAndDepositHook,
     loading: hookLoading,
     error: hookErr,
   } = useSavingsDeposit();
 
-  // New generic actions hook (deposit + withdraw into existing account)
+  // Later deposits/withdrawals
   const {
     deposit: depositAction,
     withdraw: withdrawAction,
@@ -103,17 +102,14 @@ const SavingsAccount: React.FC = () => {
   const walletAddress = user?.depositWallet?.address ?? null;
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
-  // Consider Marginfi account present iff we have an accountPk
   const hasMarginfiAccount = !!user?.marginfi?.accountPk;
-
-  // Cached hints
   const cachedAccountPk = user?.marginfi?.accountPk || null;
 
   // local state
   const [savingsUsdc, setSavingsUsdc] = useState<number>(0);
   const [balLoading, setBalLoading] = useState<boolean>(false);
   const [fxLoading, setFxLoading] = useState<boolean>(false);
-  const [fxRate, setFxRate] = useState<number>(1);
+  const [fxRate, setFxRate] = useState<number>(1); // USD -> displayCurrency
   const [err, setErr] = useState<string | null>(null);
 
   // APY state
@@ -161,7 +157,6 @@ const SavingsAccount: React.FC = () => {
     void refreshBalance();
   }, [refreshBalance, hasMarginfiAccount]);
 
-  // Fetch APY (reads { apy: decimal })
   const refreshApy = useCallback(async (): Promise<void> => {
     if (!hasMarginfiAccount) {
       setApyPct(null);
@@ -221,6 +216,7 @@ const SavingsAccount: React.FC = () => {
     [authenticated, getAccessToken]
   );
 
+  // fetch USD -> display rate
   useEffect(() => {
     if (!hasMarginfiAccount) return;
     let cancelled = false;
@@ -249,12 +245,24 @@ const SavingsAccount: React.FC = () => {
     };
   }, [hasMarginfiAccount, savingsUsdc, displayCurrency, convertFx]);
 
+  // balance in user's local currency
   const fiatValue = useMemo(() => savingsUsdc * fxRate, [savingsUsdc, fxRate]);
 
   const manualRefresh = useCallback(async () => {
     setErr(null);
     await Promise.all([refreshBalance(), refreshApy()]);
   }, [refreshBalance, refreshApy]);
+
+  // Convert a local amount to USD for on-chain (USDC)
+  const toUsd = useCallback(
+    (amountLocal: number) => {
+      if (displayCurrency === "USD") return amountLocal;
+      const r = Number(fxRate);
+      if (!Number.isFinite(r) || r <= 0) return amountLocal; // fallback
+      return amountLocal / r;
+    },
+    [displayCurrency, fxRate]
+  );
 
   /* ----------------- Embedded wallet signer (Privy) ----------------- */
   const signWithPrivy = useCallback(
@@ -275,26 +283,22 @@ const SavingsAccount: React.FC = () => {
 
   /* -------------------- Open + deposit (first time) -------------------- */
   const onOpenAndDeposit = useCallback(
-    async (amountUi: number): Promise<void> => {
-      if (!walletAddress) {
-        toast.error("Missing wallet address");
-        return;
-      }
-      if (!ready || !authenticated) {
-        toast.error("Please sign in");
-        return;
-      }
+    async (amountLocalUi: number): Promise<void> => {
+      if (!walletAddress) return void toast.error("Missing wallet address");
+      if (!ready || !authenticated) return void toast.error("Please sign in");
+
       try {
+        const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
+
         await openAndDepositHook({
           owner58: walletAddress,
-          amountUi,
+          amountUi: amountUsdUi,
           privyId: user?.privyId,
-          signer: signWithPrivy, // signer(tx) -> tx
+          signer: signWithPrivy,
         });
 
         toast.success("Savings account opened and funded ✅");
         setOpenModal(false);
-
         await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
       } catch (e: unknown) {
         const message =
@@ -312,65 +316,60 @@ const SavingsAccount: React.FC = () => {
       refreshUser,
       refreshBalance,
       refreshApy,
+      toUsd,
     ]
   );
 
   /* -------------------- Deposit / Withdraw (later) -------------------- */
   const onSubmitSavings = useCallback(
-    async (kind: "deposit" | "withdraw", amountUi: number): Promise<void> => {
-      if (!walletAddress) {
-        toast.error("Missing wallet address");
-        return;
-      }
-      if (!ready || !authenticated) {
-        toast.error("Please sign in");
-        return;
-      }
+    async (
+      kind: "deposit" | "withdraw",
+      amountLocalUi: number
+    ): Promise<void> => {
+      if (!walletAddress) return void toast.error("Missing wallet address");
+      if (!ready || !authenticated) return void toast.error("Please sign in");
 
       try {
+        const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
+
         if (kind === "deposit") {
           console.log("[UI] depositAction start", {
             owner58: walletAddress,
-            amountUi,
+            amountUsdUi,
             marginfiAccount: cachedAccountPk,
           });
 
-          const res = await depositAction({
+          await depositAction({
             owner58: walletAddress,
-            amountUi,
+            amountUi: amountUsdUi,
             decimals: 6,
             ensureAta: true,
-            marginfiAccount: cachedAccountPk, // existing account
+            marginfiAccount: cachedAccountPk,
             privyId: user?.privyId,
-            signer: signWithPrivy, // Privy/embedded signer
+            signer: signWithPrivy,
           });
 
-          console.log("[UI] depositAction result:", res);
           toast.success("Deposit submitted ✅");
-          setModal(null);
-          await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
-          return;
+        } else {
+          console.log("[UI] withdrawAction start", {
+            owner58: walletAddress,
+            amountUsdUi,
+            marginfiAccount: cachedAccountPk,
+          });
+
+          await withdrawAction({
+            owner58: walletAddress,
+            amountUi: amountUsdUi,
+            decimals: 6,
+            ensureAta: true,
+            marginfiAccount: cachedAccountPk,
+            privyId: user?.privyId,
+            signer: signWithPrivy,
+          });
+
+          toast.success("Withdrawal submitted ✅");
         }
 
-        // ---- Withdraw via hook ----
-        console.log("[UI] withdrawAction start", {
-          owner58: walletAddress,
-          amountUi,
-          marginfiAccount: cachedAccountPk,
-        });
-
-        const wres = await withdrawAction({
-          owner58: walletAddress,
-          amountUi,
-          decimals: 6,
-          ensureAta: true, // ensure dest ATA
-          marginfiAccount: cachedAccountPk, // must exist
-          privyId: user?.privyId,
-          signer: signWithPrivy,
-        });
-
-        console.log("[UI] withdrawAction result:", wres);
-        toast.success("Withdrawal submitted ✅");
         setModal(null);
         await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
       } catch (e) {
@@ -392,6 +391,7 @@ const SavingsAccount: React.FC = () => {
       depositAction,
       withdrawAction,
       signWithPrivy,
+      toUsd,
     ]
   );
 
@@ -473,6 +473,8 @@ const SavingsAccount: React.FC = () => {
             onClose={() => setOpenModal(false)}
             onSubmit={onOpenAndDeposit}
             apyPct={apyPct}
+            displayCurrency={displayCurrency}
+            fxRate={fxRate}
           />
         )}
       </div>
@@ -592,6 +594,8 @@ const SavingsAccount: React.FC = () => {
           kind={modal.kind}
           onClose={() => setModal(null)}
           onSubmit={onSubmitSavings}
+          displayCurrency={displayCurrency}
+          fxRate={fxRate} // USD -> display
         />
       )}
     </div>
@@ -636,10 +640,17 @@ function AmountModal({
   kind,
   onClose,
   onSubmit,
+  displayCurrency,
+  fxRate, // USD -> display
 }: {
   kind: "deposit" | "withdraw";
   onClose: () => void;
-  onSubmit: (kind: "deposit" | "withdraw", amountUi: number) => Promise<void>;
+  onSubmit: (
+    kind: "deposit" | "withdraw",
+    amountUiLocal: number
+  ) => Promise<void>;
+  displayCurrency: string;
+  fxRate: number;
 }) {
   const [mounted, setMounted] = useState(false);
   const [amount, setAmount] = useState<string>("");
@@ -647,12 +658,22 @@ function AmountModal({
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
 
+  const num = Number(amount);
+  const valid = Number.isFinite(num) && num > 0;
+  const usdApprox =
+    displayCurrency === "USD"
+      ? num
+      : valid && Number.isFinite(fxRate) && fxRate > 0
+      ? num / fxRate
+      : NaN;
+
   const submit = async () => {
     const v = Number(amount);
     if (!Number.isFinite(v) || v <= 0)
       return toast.error("Enter a valid amount");
     setBusy(true);
     try {
+      // parent converts local -> USD for on-chain
       await onSubmit(kind, v);
     } finally {
       setBusy(false);
@@ -671,11 +692,11 @@ function AmountModal({
         onClick={onClose}
         aria-hidden
       />
-      <div className="pointer-events-none absolute inset-0 -z-10">
+      <div className="pointer-events-none absolute inset-0 -z-10 ">
         <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
       </div>
       <div className="relative mx-auto flex min-h-screen items-center justify-center p-4 sm:p-6 overflow-y-auto overscroll-contain">
-        <div className="pointer-events-auto w-full max-w-md vision-window vision-depth flex max-h-[90vh] flex-col overflow-hidden">
+        <div className="pointer-events-auto w-full max-w-md vision-window vision-depth flex max-h-[90vh] flex-col overflow-hidden border-2 rounded-lg ">
           <h2 id="savings-modal-title" className="sr-only">
             {kind === "deposit"
               ? "Deposit to savings"
@@ -697,7 +718,7 @@ function AmountModal({
           </div>
           <div className="p-4 sm:p-6">
             <label className="block text-sm font-medium text-white/80 mb-2">
-              Amount (USDC)
+              Amount ({displayCurrency})
             </label>
             <input
               type="number"
@@ -709,6 +730,7 @@ function AmountModal({
               placeholder="0.00"
               inputMode="decimal"
             />
+
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={onClose}
@@ -717,7 +739,7 @@ function AmountModal({
                 Cancel
               </button>
               <button
-                disabled={busy}
+                disabled={busy || !valid}
                 onClick={submit}
                 className="px-5 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50"
               >
@@ -742,10 +764,14 @@ function OpenAccountModal({
   onClose,
   onSubmit,
   apyPct,
+  displayCurrency,
+  fxRate, // USD -> display
 }: {
   onClose: () => void;
-  onSubmit: (amountUi: number) => Promise<void>;
+  onSubmit: (amountUiLocal: number) => Promise<void>;
   apyPct?: number | null;
+  displayCurrency: string;
+  fxRate: number;
 }) {
   const [mounted, setMounted] = useState(false);
   const [amount, setAmount] = useState<string>("");
@@ -753,12 +779,22 @@ function OpenAccountModal({
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
 
+  const num = Number(amount);
+  const valid = Number.isFinite(num) && num > 0;
+  const usdApprox =
+    displayCurrency === "USD"
+      ? num
+      : valid && Number.isFinite(fxRate) && fxRate > 0
+      ? num / fxRate
+      : NaN;
+
   const submit = async () => {
     const v = Number(amount);
     if (!Number.isFinite(v) || v <= 0)
       return toast.error("Enter a valid amount");
     setBusy(true);
     try {
+      // parent converts local -> USD for on-chain
       await onSubmit(v);
     } finally {
       setBusy(false);
@@ -797,7 +833,8 @@ function OpenAccountModal({
           </div>
           <div className="p-4 sm:p-6">
             <p className="text-sm text-white/70 mb-4">
-              Enter an initial USDC amount to fund your new savings account.
+              Enter an initial amount in your currency. We’ll convert it to USDC
+              behind the scenes.
               {apyPct && (
                 <span className="block mt-2 text-[rgb(182,255,62)] font-medium">
                   Earn up to {formatPct(apyPct)} APY on your savings.
@@ -805,7 +842,7 @@ function OpenAccountModal({
               )}
             </p>
             <label className="block text-sm font-medium text-white/80 mb-2">
-              Initial deposit (USDC)
+              Initial deposit ({displayCurrency})
             </label>
             <input
               type="number"
@@ -817,6 +854,22 @@ function OpenAccountModal({
               placeholder="0.00"
               inputMode="decimal"
             />
+
+            {/* live “≈ USDC” preview */}
+            <div className="mt-2 text-xs text-white/60">
+              {valid ? (
+                <span>
+                  ≈{" "}
+                  <span className="font-mono">
+                    {Number.isFinite(usdApprox) ? usdApprox.toFixed(2) : "—"}
+                  </span>{" "}
+                  USDC
+                </span>
+              ) : (
+                <span>Enter an amount</span>
+              )}
+            </div>
+
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={onClose}
@@ -825,7 +878,7 @@ function OpenAccountModal({
                 Cancel
               </button>
               <button
-                disabled={busy}
+                disabled={busy || !valid}
                 onClick={submit}
                 className="px-5 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50"
               >

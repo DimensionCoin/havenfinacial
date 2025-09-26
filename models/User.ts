@@ -72,6 +72,29 @@ const EmbeddedWalletSchema = new Schema<EmbeddedWallet>(
   { _id: false }
 );
 
+/** ---------- NEW: Contacts (address book) ---------- */
+
+type Contact = {
+  firstName: string;
+  lastName?: string;
+  email: string; // normalized (lowercase + trim)
+};
+
+const ContactSchema = new Schema<Contact>(
+  {
+    firstName: { type: String, required: true, trim: true },
+    lastName: { type: String, trim: true, default: "" },
+    email: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true,
+      match: /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+    },
+  },
+  { _id: true }
+);
+
 /** ---------- Marginfi + token account caches (no savings wallet/ATA) ---------- */
 
 type MarginfiMeta = {
@@ -185,6 +208,9 @@ const UserSchema = new Schema(
       acceptedAt: { type: Date },
       version: { type: String, default: "" },
     },
+
+    /** NEW: Contacts (simple address book) */
+    contacts: { type: [ContactSchema], default: [] },
 
     displayName: { type: String, trim: true },
 

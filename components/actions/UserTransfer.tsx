@@ -10,6 +10,9 @@ import { useUser } from "@/providers/UserProvider";
 import { useResolveDepositOwnerByEmail } from "@/hooks/useResolveDepositOwnerByEmail";
 import { useSponsoredUsdcTransfer } from "@/hooks/useSponsoredUsdcTransfer";
 
+/* ------------------------------- NEW: contacts ---------------------------- */
+import Contacts from "@/components/shared/Contacts";
+
 /* ------------------------------- constants -------------------------------- */
 
 const EXPLORER_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || "devnet";
@@ -330,6 +333,16 @@ export default function UserTransfer({
               <label className="block text-sm font-semibold text-white/90">
                 Recipient Email
               </label>
+
+              {/* NEW: Contacts trigger — opens modal and autofills email on pick */}
+              <div className="flex justify-end">
+                <Contacts
+                  buttonLabel="Pick from Contacts"
+                  onPick={(c) => setEmail(c.email)}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/20 px-3 py-2 text-sm font-medium text-white/90 hover:bg-white/10"
+                />
+              </div>
+
               <div className="relative">
                 <input
                   type="email"
@@ -407,7 +420,7 @@ export default function UserTransfer({
                 step="0.01"
                 value={amountLocalStr}
                 onChange={(e) => setAmountLocalStr(e.target.value)}
-                className="w-full rounded-2xl border border-white/20 bg-white/5 backdrop-blur-sm px-4 py-4 sm:px-6 sm:py-4 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/50 focus:border-[rgb(182,255,62)] hover:border-white/30 transition-all duration-300 text-base text-2xl sm:text-3xl font-bold"
+                className="w-full rounded-2xl border border-white/20 bg-white/5 backdrop-blur-sm px-4 py-4 sm:px-6 sm:py-4 text-white placeholder-white/40 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/50 focus:border-[rgb(182,255,62)] hover:border-white/30 transition-all duration-300 text-base  sm:text-3xl font-bold"
                 placeholder="0.00"
                 inputMode="decimal"
               />

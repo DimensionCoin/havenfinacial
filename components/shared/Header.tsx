@@ -161,34 +161,95 @@ export default function Header() {
                     <div
                       ref={menuRef}
                       role="menu"
-                      className="absolute right-0 mt-2 w-56 overflow-hidden rounded-3xl menu-surface"
+                      aria-label="Account menu"
+                      className="absolute right-0 z-50 mt-2 w-64 rounded-2xl border border-white/10 bg-black/92 backdrop-blur-xl shadow-[0_24px_48px_rgba(0,0,0,0.5)] p-2"
                     >
-                      <div className="menu-divider border-b px-4 py-3 text-xs text-muted-foreground">
-                        <p className="uppercase tracking-wide">Signed in as</p>
-                        <p className="truncate text-foreground">{email}</p>
+                      {/* tiny caret */}
+                      <div className="absolute -top-2 right-6 h-4 w-4 rotate-45 rounded-sm bg-black/40 border-l border-t border-white/10" />
+
+                      {/* header */}
+                      <div className="flex items-center gap-3 rounded-xl px-3 py-3 bg-white/[0.03] border border-white/10">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-sm font-semibold text-white">
+                          {(email?.[0] || "•").toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                            Signed in as
+                          </p>
+                          <p
+                            className="truncate text-sm text-foreground"
+                            title={email}
+                          >
+                            {email}
+                          </p>
+                        </div>
                       </div>
 
-                      <Link
-                        href="/settings"
-                        className="menu-item"
-                        onClick={() => setMenuOpen(false)}
-                        role="menuitem"
-                      >
-                        Settings
-                      </Link>
+                      <div className="my-2 h-px bg-white/10" />
 
-                      <button
-                        className="w-full text-left menu-item text-red-300 hover:bg-red-500/10"
-                        onClick={handleLogout}
-                        role="menuitem"
-                      >
-                        Log out
-                      </button>
+                      {/* items */}
+                      <div className="mt-1">
+                        <Link
+                          href="/settings"
+                          role="menuitem"
+                          onClick={() => setMenuOpen(false)}
+                          className="menu-item group flex items-center gap-3 rounded-xl px-3 py-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgb(182,255,62)]/40 hover:bg-white/10"
+                        >
+                          {/* icon: settings */}
+                          <svg
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            className="flex-none opacity-80 group-hover:opacity-100"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M12 8.5a3.5 3.5 0 1 1 0 7 a3.5 3.5 0 0 1 0-7m9.94 3.06l-1.94-.5a7.8 7.8 0 0 0-.7-1.68l1.13-1.6c.24-.35.2-.82-.1-1.12l-1.29-1.29c-.3-.3-.77-.34-1.12-.1l-1.6 1.13c-.54-.3-1.1-.53-1.69-.7l-.49-1.94A.9.9 0 0 0 12 2h-1.83a.9.9 0 0 0-.88.69l-.5 1.94c-.58.17-1.14.4-1.68.7L5.5 4.1a.85.85 0 0 0-1.12.1L3.1 5.5a.85.85 0 0 0-.1 1.12l1.13 1.6c-.3.54-.53 1.1-.7 1.68l-1.94.5a.9.9 0 0 0-.69.88V13c0 .41.28.77.69.88l1.94.5c.17.58.4 1.14.7 1.68l-1.13 1.6a.85.85 0 0 0 .1 1.12l1.29 1.29c.3.3.77.34 1.12.1l1.6-1.13c.54.3 1.1.53 1.68.7l.5 1.94c.11.41.47.69.88.69H12c.41 0 .77-.28.88-.69l.49-1.94c.59-.17 1.15-.4 1.69-.7l1.6 1.13c.35.24.82.2 1.12-.1l1.29-1.29c.3-.3.34-.77.1-1.12l-1.13-1.6c.3-.54.53-1.1.7-1.68l1.94-.5c.41-.11.69-.47.69-.88V12a.9.9 0 0 0-.69-.88Z"
+                            />
+                          </svg>
+                          <span className="flex-1">Settings</span>
+                          <svg
+                            width="16"
+                            height="16"
+                            viewBox="0 0 24 24"
+                            className="opacity-0 -translate-x-1 transition group-hover:opacity-80 group-hover:translate-x-0"
+                          >
+                            <path fill="currentColor" d="M9 6l6 6l-6 6" />
+                          </svg>
+                        </Link>
 
-                      <AddToHomeButton
-                        variant="menu"
-                        onDone={() => setMenuOpen(false)}
-                      />
+                        {/* Add to Home (kept your component) */}
+                        <AddToHomeButton
+                          variant="menu"
+                          onDone={() => setMenuOpen(false)}
+                        />
+
+                        <div className="my-2 h-px bg-white/10" />
+
+                        <button
+                          role="menuitem"
+                          onClick={handleLogout}
+                          className="menu-item w-full text-left flex items-center gap-3 rounded-xl px-3 py-2.5 text-red-300 hover:bg-red-500/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/40"
+                        >
+                          {/* icon: logout */}
+                          <svg
+                            width="18"
+                            height="18"
+                            viewBox="0 0 24 24"
+                            className="flex-none"
+                          >
+                            <path
+                              fill="currentColor"
+                              d="M16 17l1.41-1.41L14.83 13H21v-2h-6.17l2.58-2.59L16 7l-5 5z"
+                            />
+                            <path
+                              fill="currentColor"
+                              d="M3 19h8v-2H5V7h6V5H3z"
+                            />
+                          </svg>
+                          <span className="flex-1">Log out</span>
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
