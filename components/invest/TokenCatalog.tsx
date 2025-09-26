@@ -376,7 +376,7 @@ export default function TokenCatalog({
                             alt={`${t.name} logo`}
                             width={48}
                             height={48}
-                            className="h-10 w-10 sm:h-14 sm:w-14 rounded-xl sm:rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
+                            className="h-10 w-10 sm:h-14 sm:w-14 rounded-full sm:rounded-full border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
                           />
                           {pricesLoading && (
                             <div className="absolute -top-0.5 -right-0.5 sm:-top-1 sm:-right-1 h-3 w-3 sm:h-4 sm:w-4 bg-[rgb(182,255,62)] rounded-full animate-pulse shadow-[0_0_20px_rgba(182,255,62,0.6)]" />
