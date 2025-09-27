@@ -327,7 +327,7 @@ export default function WalletHoldings({
     } finally {
       setLoading(false);
     }
-  }, [owner58, byClusterMint, mainnetMintFor, cluster]);
+  }, [owner58, byClusterMint, mainnetMintFor]);
 
   useEffect(() => {
     (async () => {

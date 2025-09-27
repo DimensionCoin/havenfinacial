@@ -730,6 +730,19 @@ function AmountModal({
               placeholder="0.00"
               inputMode="decimal"
             />
+            <div className="mt-2 text-xs text-white/60">
+              {valid ? (
+                <span>
+                  ≈{" "}
+                  <span className="font-mono">
+                    {Number.isFinite(usdApprox) ? usdApprox.toFixed(2) : "—"}
+                  </span>{" "}
+                  USDC
+                </span>
+              ) : (
+                <span>Enter an amount</span>
+              )}
+            </div>
 
             <div className="flex justify-end gap-2 mt-6">
               <button

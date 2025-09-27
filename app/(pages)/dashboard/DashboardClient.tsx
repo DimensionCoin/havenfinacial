@@ -42,6 +42,14 @@ const SavingsAccount = nextDynamic(
   }
 );
 
+const InvestAccount = nextDynamic(
+  () => import("@/components/dash/InvestAccount"),
+  {
+    ssr: false,
+    loading: () => <DepositSkeleton />,
+  }
+);
+
 export default function DashboardClient() {
   return (
     <main className="py-3 px-4">
@@ -49,6 +57,7 @@ export default function DashboardClient() {
       <div className="mt-2 space-y-8">
         <DepositAccount />
         <SavingsAccount />
+        <InvestAccount />
       </div>
     </main>
   );
