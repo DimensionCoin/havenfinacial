@@ -93,10 +93,8 @@ function InvestAccountCard() {
     []
   );
 
-  // Stable connection
   const [conn] = useState(() => new Connection(RPC, "confirmed"));
 
-  // State
   const [hasLoaded, setHasLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -201,7 +199,6 @@ function InvestAccountCard() {
     void refreshHoldings();
   }, [refreshHoldings]);
 
-  // FX rate
   useEffect(() => {
     if (currency === "USD") return setFxRate(1);
     (async () => {
@@ -223,7 +220,6 @@ function InvestAccountCard() {
 
   const manualRefresh = useCallback(
     (e?: React.MouseEvent<HTMLButtonElement>) => {
-      // Don't navigate to /invest when hitting Refresh
       if (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -234,6 +230,7 @@ function InvestAccountCard() {
   );
 
   const showEmpty = hasLoaded && positions.length === 0;
+  const hasAssets = !showEmpty;
 
   return (
     <Link
@@ -242,15 +239,14 @@ function InvestAccountCard() {
       aria-label="Open Invest page"
     >
       <div className="relative group">
-        {/* Background glow effect */}
+        {/* Background glow */}
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-        {/* Main glass window container */}
+        {/* Card */}
         <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu cursor-pointer">
-          {/* Subtle inner glow */}
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
-          {/* Header with status & refresh */}
+          {/* Header */}
           <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
             <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
               <div className="relative flex-shrink-0">
@@ -262,12 +258,12 @@ function InvestAccountCard() {
                   Invest Account
                 </h3>
                 <p className="text-xs sm:text-sm text-white/60 mt-1">
-                  Portfolio Value
+                  {hasAssets ? "Portfolio Value" : "Get started"}
                 </p>
               </div>
             </div>
 
-            {/* Refresh button: prevents navigation */}
+            {/* Refresh (prevents navigation) */}
             <button
               onClick={manualRefresh}
               disabled={refreshing || !owner58}
@@ -289,55 +285,57 @@ function InvestAccountCard() {
             </button>
           </div>
 
-          {/* Balance + token logos */}
-          <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-baseline gap-3">
-                {refreshing ? (
-                  <div className="flex items-center gap-3">
-                    <div className="h-8 w-24 sm:h-12 sm:w-36 bg-white/10 rounded-xl animate-pulse" />
-                    <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
-                  </div>
-                ) : (
-                  <>
-                    <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
-                      {formatFiatNarrow(fiatTotal, currency)}
-                    </span>
-                    <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end pb-1 lg:pb-2">
-                      {currency.toLowerCase()}
-                    </span>
-                  </>
-                )}
+          {/* Content: use a 2-col grid at ALL sizes to keep symmetry */}
+          {hasAssets ? (
+            <div className="grid grid-cols-2 items-end gap-4">
+              {/* Balance (left) */}
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-3 min-h-[2.75rem] sm:min-h-[3.25rem]">
+                  {refreshing ? (
+                    <div className="flex items-center gap-3">
+                      <div className="h-8 w-24 sm:h-12 sm:w-36 bg-white/10 rounded-xl animate-pulse" />
+                      <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
+                        {formatFiatNarrow(fiatTotal, currency)}
+                      </span>
+                      <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium self-end pb-1 lg:pb-2">
+                        {currency.toLowerCase()}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
 
-            <div className="flex flex-col items-end">
-              <div className="flex space-x-2 mb-1">
-                {refreshing
-                  ? Array.from({ length: 3 }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="w-8 h-8 rounded-full border border-white/10 bg-white/5 animate-pulse"
-                      />
-                    ))
-                  : positions
-                      .slice(0, 3)
-                      .map((p) => (
-                        <Image
-                          key={p.token.symbol}
-                          src={
-                            p.token.logo ||
-                            "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
-                          }
-                          alt={`${p.token.name} logo`}
-                          width={32}
-                          height={32}
-                          className="rounded-full border border-white/20 bg-white/10 object-contain shadow-[0_0_12px_rgba(182,255,62,0.05)]"
+              {/* Logos + count (right) */}
+              <div className="justify-self-end text-right">
+                <div className="flex justify-end space-x-2 mb-1 min-h-8">
+                  {refreshing
+                    ? Array.from({ length: 3 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className="w-8 h-8 rounded-full border border-white/10 bg-white/5 animate-pulse"
                         />
-                      ))}
-              </div>
-              <div className="group/pos text-right">
-                <p className="text-xs text-white/60 group-hover/pos:text-white/80 transition-colors">
+                      ))
+                    : positions
+                        .slice(0, 3)
+                        .map((p) => (
+                          <Image
+                            key={p.token.symbol}
+                            src={
+                              p.token.logo ||
+                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png"
+                            }
+                            alt={`${p.token.name} logo`}
+                            width={32}
+                            height={32}
+                            className="rounded-full border border-white/20 bg-white/10 object-contain shadow-[0_0_12px_rgba(182,255,62,0.05)]"
+                          />
+                        ))}
+                </div>
+                <p className="text-xs text-white/60">
                   {hasLoaded ? (
                     <>
                       {positions.length} position
@@ -349,29 +347,21 @@ function InvestAccountCard() {
                 </p>
               </div>
             </div>
-          </div>
-
-          {/* Empty state */}
-          {showEmpty && (
-            <div
-              onClick={(e) => {
-                // allow the whole card to remain a link, but keep this readable
-                e.stopPropagation();
-              }}
-              className="mt-6 vision-glass p-4 rounded-2xl text-white/80 text-sm border border-white/10"
-            >
-              You don&apos;t have any assets —{" "}
-              <Link
-                href="/invest"
-                onClick={(e) => {
-                  // this link is fine to navigate; prevent double navigation from parent Link
-                  e.stopPropagation();
-                }}
-                className="underline text-[rgb(182,255,62)] hover:text-white"
-              >
-                click here to buy some
-              </Link>
-              .
+          ) : (
+            // Empty state: keep grid symmetry too
+            <div className="grid grid-cols-2 items-center gap-3">
+              <div className="text-white/70 text-sm">
+                You don&apos;t have any assets yet.
+              </div>
+              <div className="justify-self-end">
+                <div
+                  className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)]"
+                  role="button"
+                  aria-label="Buy assets"
+                >
+                  <span>Buy some assets</span>
+                </div>
+              </div>
             </div>
           )}
         </div>
