@@ -4,17 +4,17 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
-import { findTokenByMint } from "@/lib/tokens"; // client-safe: logos + symbols
+import { findTokenByMint } from "@/lib/tokens";
 
 type Item = {
   signature: string;
-  blockTime: number | null; // seconds
-  direction: "in" | "out"; // USDC direction
+  blockTime: number | null;
+  direction: "in" | "out";
   amountUi: number; // USDC
   counterparty?: string | null;
   feeLamports?: number | null;
 
-  // from the API enrichment
+  // from API enrichment
   kind?: "transfer" | "swap" | "email";
   swapBoughtMint?: string;
   swapBoughtAmountUi?: number;
@@ -24,13 +24,13 @@ type Item = {
 type ApiResp = { ok: true; items: Item[]; nextBefore: string | null };
 
 const EXPLORER_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || "mainnet";
+const isMainnet =
+  EXPLORER_CLUSTER === "mainnet" || EXPLORER_CLUSTER === "mainnet-beta";
 
-function explorerTx(sig: string) {
-  // For mainnet: no cluster param; others include cluster
-  return EXPLORER_CLUSTER === "mainnet" || EXPLORER_CLUSTER === "mainnet-beta"
+const explorerTx = (sig: string) =>
+  isMainnet
     ? `https://explorer.solana.com/tx/${sig}`
     : `https://explorer.solana.com/tx/${sig}?cluster=${EXPLORER_CLUSTER}`;
-}
 
 function TokenBoughtPill({
   mint,
@@ -65,7 +65,7 @@ export default function ActivityList() {
     return c === "USDC" ? "USD" : c;
   }, [user?.displayCurrency]);
 
-  const [rate, setRate] = useState<number>(1); // USD -> targetCurrency
+  const [rate, setRate] = useState<number>(1);
   const [loadingFx, setLoadingFx] = useState(false);
 
   const [items, setItems] = useState<Item[]>([]);
@@ -128,8 +128,7 @@ export default function ActivityList() {
         setItems((prev) => (cursor ? [...prev, ...j.items] : j.items));
         setNextBefore(j.nextBefore);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setErr(msg);
+        setErr(e instanceof Error ? e.message : "Failed to load activity");
       } finally {
         setLoading(false);
       }
@@ -176,7 +175,6 @@ export default function ActivityList() {
         })
       : "—";
 
-  // Row labels driven by API-provided kind + counterpartyLabel
   const labelFor = useCallback(
     (it: Item): { title: string; subtitle?: string } => {
       const cp = (it.counterpartyLabel || "").trim();
@@ -205,7 +203,7 @@ export default function ActivityList() {
     []
   );
 
-  // Group by date for statement sections
+  // Group by day for statement sections
   const groups = useMemo(() => {
     const map = new Map<string, Item[]>();
     for (const it of items) {
@@ -217,14 +215,29 @@ export default function ActivityList() {
     return Array.from(map.entries());
   }, [items]);
 
+  // Simple mobile skeleton rows
+  const SkeletonRow = () => (
+    <li className="px-4 py-3 flex items-center justify-between">
+      <div className="flex-1 min-w-0">
+        <div className="h-3 w-40 bg-white/10 rounded mb-2" />
+        <div className="h-3 w-24 bg-white/10 rounded" />
+      </div>
+      <div className="w-24 h-4 bg-white/10 rounded" />
+    </li>
+  );
+
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-white">Activity</h2>
+        <h2 className="text-base sm:text-xl font-semibold text-white">
+          Activity
+        </h2>
         <button
           onClick={() => load(null)}
-          className="text-xs px-3 py-1.5 rounded-md border border-white/10 text-white/80 hover:bg-white/10"
+          className="text-xs px-3 py-2 rounded-md border border-white/10 text-white/80 hover:bg-white/10 active:scale-[0.98]"
           disabled={loading}
+          aria-label="Refresh activity"
         >
           {loading ? "Refreshing…" : "Refresh"}
         </button>
@@ -240,7 +253,8 @@ export default function ActivityList() {
         <div className="text-sm text-white/60">No activity yet.</div>
       ) : (
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden">
-          <div className="px-4 py-2 text-xs text-white/60 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+          {/* Top bar */}
+          <div className="px-4 py-2 text-[11px] sm:text-xs text-white/60 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
             <span>Bank statement view</span>
             <span>
               {loadingFx && targetCurrency !== "USD"
@@ -249,10 +263,19 @@ export default function ActivityList() {
             </span>
           </div>
 
-          <div className="divide-y divide-white/10">
+          {/* MOBILE view (default): stacked, tap-friendly */}
+          <div className="sm:hidden divide-y divide-white/10">
+            {loading && items.length === 0 ? (
+              <>
+                <SkeletonRow />
+                <SkeletonRow />
+                <SkeletonRow />
+              </>
+            ) : null}
+
             {groups.map(([date, rows]) => (
               <section key={date} className="py-1">
-                <div className="px-4 py-2 text-xs font-medium text-white/70 bg-white/[0.02]">
+                <div className="px-4 py-2 text-[11px] font-medium text-white/70 bg-white/[0.02] sticky top-0">
                   {date}
                 </div>
                 <ul className="divide-y divide-white/5">
@@ -261,63 +284,56 @@ export default function ActivityList() {
                     const { title, subtitle } = labelFor(it);
 
                     return (
-                      <li
-                        key={it.signature}
-                        className="px-4 py-3 grid grid-cols-12 gap-2 items-center hover:bg-white/[0.04] transition-colors"
-                      >
-                        {/* Time */}
-                        <div className="col-span-2 md:col-span-2">
-                          <div className="text-xs text-white/60">
-                            {fmtTime(it.blockTime)}
+                      <li key={it.signature} className="px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          {/* Left: title + subtitle + tag */}
+                          <div className="min-w-0">
+                            <div className="text-[15px] text-white/90 truncate">
+                              {title}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-2">
+                              {it.kind === "swap" ? (
+                                <TokenBoughtPill
+                                  mint={it.swapBoughtMint}
+                                  amountUi={it.swapBoughtAmountUi}
+                                />
+                              ) : null}
+                              {subtitle ? (
+                                <span className="text-xs text-white/50">
+                                  {subtitle}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="mt-1 text-[11px] text-white/45">
+                              {fmtTime(it.blockTime)}
+                            </div>
+                            <div className="mt-2">
+                              <a
+                                href={explorerTx(it.signature)}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] text-white/40 hover:text-white/70 underline underline-offset-2"
+                              >
+                                View on explorer →
+                              </a>
+                            </div>
                           </div>
-                        </div>
 
-                        {/* Description */}
-                        <div className="col-span-6 md:col-span-6 min-w-0">
-                          <div className="text-sm text-white/90 truncate">
-                            {title}
+                          {/* Right: amount */}
+                          <div className="text-right flex-shrink-0">
+                            <div
+                              className={`text-sm font-semibold ${
+                                it.direction === "in"
+                                  ? "text-[rgb(182,255,62)]"
+                                  : "text-red-400"
+                              }`}
+                            >
+                              {fmtAmt(it.amountUi, sign)}
+                            </div>
+                            <div className="text-[11px] text-white/50">
+                              {it.amountUi.toFixed(2)} USDC
+                            </div>
                           </div>
-                          <div className="mt-1 flex items-center gap-2">
-                            {it.kind === "swap" ? (
-                              <TokenBoughtPill
-                                mint={it.swapBoughtMint}
-                                amountUi={it.swapBoughtAmountUi}
-                              />
-                            ) : null}
-                            {subtitle ? (
-                              <span className="text-xs text-white/50">
-                                {subtitle}
-                              </span>
-                            ) : null}
-                          </div>
-                        </div>
-
-                        {/* Amount (USDC + local) */}
-                        <div className="col-span-4 md:col-span-4 text-right">
-                          <div
-                            className={`text-sm font-semibold ${
-                              it.direction === "in"
-                                ? "text-[rgb(182,255,62)]"
-                                : "text-red-400"
-                            }`}
-                          >
-                            {fmtAmt(it.amountUi, sign)}
-                          </div>
-                          <div className="text-[11px] text-white/50">
-                            {it.amountUi.toFixed(2)} USDC
-                          </div>
-                        </div>
-
-                        {/* Explorer link */}
-                        <div className="col-span-12 mt-1 text-right text-[11px]">
-                          <a
-                            href={explorerTx(it.signature)}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-white/40 hover:text-white/70 hover:underline"
-                          >
-                            View on explorer →
-                          </a>
                         </div>
                       </li>
                     );
@@ -327,12 +343,115 @@ export default function ActivityList() {
             ))}
           </div>
 
+          {/* DESKTOP view (sm+): grid/table */}
+          <div className="hidden sm:block">
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-white/5 text-white/70">
+                  <tr>
+                    <th className="text-left px-4 py-2 font-medium">When</th>
+                    <th className="text-left px-4 py-2 font-medium">
+                      Description
+                    </th>
+                    <th className="text-right px-4 py-2 font-medium">Amount</th>
+                    <th className="text-right px-4 py-2 font-medium">Tx</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/10">
+                  {groups.map(([date, rows]) => (
+                    <tr key={date} className="bg-white/[0.02]">
+                      <td
+                        colSpan={4}
+                        className="px-4 py-2 text-xs font-medium text-white/70"
+                      >
+                        {date}
+                      </td>
+                    </tr>
+                  )).length === 0 && loading ? (
+                    <>
+                      <tr>
+                        <td colSpan={4}>
+                          <SkeletonRow />
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={4}>
+                          <SkeletonRow />
+                        </td>
+                      </tr>
+                    </>
+                  ) : null}
+
+                  {groups.flatMap(([date, rows]) =>
+                    rows.map((it) => {
+                      const sign: "+" | "-" = it.direction === "in" ? "+" : "-";
+                      const { title, subtitle } = labelFor(it);
+                      return (
+                        <tr
+                          key={it.signature}
+                          className="text-white/90 hover:bg-white/[0.04]"
+                        >
+                          <td className="px-4 py-3 text-white/70">
+                            <div>{fmtDate(it.blockTime)}</div>
+                            <div className="text-[11px] text-white/45">
+                              {fmtTime(it.blockTime)}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="text-sm">{title}</div>
+                            <div className="mt-1 flex items-center gap-2">
+                              {it.kind === "swap" ? (
+                                <TokenBoughtPill
+                                  mint={it.swapBoughtMint}
+                                  amountUi={it.swapBoughtAmountUi}
+                                />
+                              ) : null}
+                              {subtitle ? (
+                                <span className="text-xs text-white/50">
+                                  {subtitle}
+                                </span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <div
+                              className={`text-sm font-semibold ${
+                                it.direction === "in"
+                                  ? "text-[rgb(182,255,62)]"
+                                  : "text-red-400"
+                              }`}
+                            >
+                              {fmtAmt(it.amountUi, sign)}
+                            </div>
+                            <div className="text-[11px] text-white/50">
+                              {it.amountUi.toFixed(2)} USDC
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <a
+                              href={explorerTx(it.signature)}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-[rgb(182,255,62)] hover:underline"
+                            >
+                              View →
+                            </a>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
           {/* Pager */}
           <div className="p-3 flex items-center justify-end">
             <button
               onClick={() => nextBefore && load(nextBefore)}
               disabled={!nextBefore || loading}
-              className="text-xs px-3 py-1.5 rounded-md border border-white/10 text-white/80 disabled:opacity-50 hover:bg-white/10"
+              className="w-full sm:w-auto text-xs px-3 py-2 rounded-md border border-white/10 text-white/80 disabled:opacity-50 hover:bg-white/10 active:scale-[0.98]"
             >
               {loading ? "Loading…" : nextBefore ? "Load more" : "End of list"}
             </button>
