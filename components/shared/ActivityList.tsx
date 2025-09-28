@@ -4,24 +4,56 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
+import { findTokenByMint } from "@/lib/tokens"; // client-safe: logos + symbols
 
 type Item = {
   signature: string;
   blockTime: number | null; // seconds
-  direction: "in" | "out";
+  direction: "in" | "out"; // USDC direction
   amountUi: number; // USDC
   counterparty?: string | null;
   feeLamports?: number | null;
+
+  // from the API enrichment
+  kind?: "transfer" | "swap" | "email";
+  swapBoughtMint?: string;
+  swapBoughtAmountUi?: number;
+  counterpartyLabel?: string | null;
 };
 
 type ApiResp = { ok: true; items: Item[]; nextBefore: string | null };
 
-const EXPLORER_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || "devnet";
+const EXPLORER_CLUSTER = process.env.NEXT_PUBLIC_SOLANA_CLUSTER || "mainnet";
 
 function explorerTx(sig: string) {
-  return EXPLORER_CLUSTER === "mainnet"
+  // For mainnet: no cluster param; others include cluster
+  return EXPLORER_CLUSTER === "mainnet" || EXPLORER_CLUSTER === "mainnet-beta"
     ? `https://explorer.solana.com/tx/${sig}`
     : `https://explorer.solana.com/tx/${sig}?cluster=${EXPLORER_CLUSTER}`;
+}
+
+function TokenBoughtPill({
+  mint,
+  amountUi,
+}: {
+  mint?: string;
+  amountUi?: number;
+}) {
+  if (!mint || !amountUi || amountUi <= 0) return null;
+  const meta = findTokenByMint(mint);
+  const symbol = meta?.symbol ?? "TOKEN";
+  const logo = meta?.logo ?? "/logos/generic-token.png";
+  const dec = Math.max(0, Math.min(6, meta?.decimals ?? 6));
+  return (
+    <span className="inline-flex items-center gap-2 px-2 py-1 rounded-md bg-white/[0.06] border border-white/10">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={logo} alt={symbol} className="h-4 w-4 rounded-sm" />
+      <span className="text-xs text-white/80">
+        {amountUi.toFixed(Math.min(4, dec))}
+      </span>
+      <span className="text-xs text-white/60">{symbol}</span>
+    </span>
+  );
 }
 
 export default function ActivityList() {
@@ -112,16 +144,16 @@ export default function ActivityList() {
   }, [ready, loadFx, load]);
 
   const fmtAmt = useCallback(
-    (usdcUi: number) => {
+    (usdcUi: number, sign: "+" | "-") => {
       const local = usdcUi * rate;
       try {
-        return new Intl.NumberFormat(undefined, {
+        return `${sign}${new Intl.NumberFormat(undefined, {
           style: "currency",
           currency: targetCurrency,
           maximumFractionDigits: 2,
-        }).format(local);
+        }).format(local)}`;
       } catch {
-        return `${targetCurrency} ${local.toFixed(2)}`;
+        return `${sign}${targetCurrency} ${local.toFixed(2)}`;
       }
     },
     [rate, targetCurrency]
@@ -129,14 +161,61 @@ export default function ActivityList() {
 
   const fmtDate = (sec: number | null) =>
     sec
-      ? new Date(sec * 1000).toLocaleString(undefined, {
+      ? new Date(sec * 1000).toLocaleDateString(undefined, {
           year: "numeric",
           month: "short",
           day: "2-digit",
+        })
+      : "—";
+
+  const fmtTime = (sec: number | null) =>
+    sec
+      ? new Date(sec * 1000).toLocaleTimeString(undefined, {
           hour: "2-digit",
           minute: "2-digit",
         })
       : "—";
+
+  // Row labels driven by API-provided kind + counterpartyLabel
+  const labelFor = useCallback(
+    (it: Item): { title: string; subtitle?: string } => {
+      const cp = (it.counterpartyLabel || "").trim();
+
+      if (it.kind === "email") {
+        return {
+          title:
+            it.direction === "in"
+              ? "Haven email transfer (received)"
+              : "Haven email transfer (sent)",
+          subtitle: "Haven Escrow",
+        };
+      }
+
+      if (it.kind === "swap" && it.swapBoughtMint && it.swapBoughtAmountUi) {
+        const meta = findTokenByMint(it.swapBoughtMint);
+        const sym = meta?.symbol ?? "TOKEN";
+        return { title: `Asset purchase — ${sym}`, subtitle: cp || "Swap" };
+      }
+
+      if (it.direction === "in") {
+        return { title: "Transfer from", subtitle: cp || "External" };
+      }
+      return { title: "Transfer to", subtitle: cp || "External" };
+    },
+    []
+  );
+
+  // Group by date for statement sections
+  const groups = useMemo(() => {
+    const map = new Map<string, Item[]>();
+    for (const it of items) {
+      const d = fmtDate(it.blockTime);
+      const list = map.get(d) || [];
+      list.push(it);
+      map.set(d, list);
+    }
+    return Array.from(map.entries());
+  }, [items]);
 
   return (
     <div className="w-full max-w-3xl mx-auto space-y-4">
@@ -160,74 +239,96 @@ export default function ActivityList() {
       ) : items.length === 0 && !loading ? (
         <div className="text-sm text-white/60">No activity yet.</div>
       ) : (
-        <div className="rounded-xl border border-white/10 bg-zinc-900/60 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-white/5 text-white/70">
-              <tr>
-                <th className="text-left px-4 py-2 font-medium">When</th>
-                <th className="text-left px-4 py-2 font-medium">Type</th>
-                <th className="text-right px-4 py-2 font-medium">Amount</th>
-                <th className="text-left px-4 py-2 font-medium">
-                  Counterparty
-                </th>
-                <th className="text-right px-4 py-2 font-medium">Tx</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/10">
-              {items.map((it) => (
-                <tr key={it.signature} className="text-white/90">
-                  <td className="px-4 py-3 text-white/70">
-                    {fmtDate(it.blockTime)}
-                  </td>
-                  <td className="px-4 py-3">
-                    {it.direction === "in" ? (
-                      <span className="text-green-400 font-medium">
-                        Received
-                      </span>
-                    ) : (
-                      <span className="text-red-400 font-medium">Sent</span>
-                    )}{" "}
-                    <span className="text-white/60">USDC</span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="font-semibold">
-                      {it.direction === "in" ? "+" : "-"}
-                      {fmtAmt(it.amountUi)}
-                    </div>
-                    <div className="text-xs text-white/50">
-                      {it.amountUi.toFixed(2)} USDC
-                    </div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-white/80">
-                      {it.counterparty
-                        ? it.counterparty.slice(0, 4) +
-                          "…" +
-                          it.counterparty.slice(-4)
-                        : "—"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <a
-                      href={explorerTx(it.signature)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-[rgb(182,255,62)] hover:underline"
-                    >
-                      View →
-                    </a>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-
-          <div className="p-3 flex items-center justify-between">
-            <div className="text-xs text-white/50">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] overflow-hidden">
+          <div className="px-4 py-2 text-xs text-white/60 border-b border-white/10 flex items-center justify-between bg-white/[0.02]">
+            <span>Bank statement view</span>
+            <span>
               {loadingFx && targetCurrency !== "USD"
                 ? "Updating FX…"
                 : `FX: 1 USD ≈ ${rate.toFixed(4)} ${targetCurrency}`}
-            </div>
+            </span>
+          </div>
+
+          <div className="divide-y divide-white/10">
+            {groups.map(([date, rows]) => (
+              <section key={date} className="py-1">
+                <div className="px-4 py-2 text-xs font-medium text-white/70 bg-white/[0.02]">
+                  {date}
+                </div>
+                <ul className="divide-y divide-white/5">
+                  {rows.map((it) => {
+                    const sign: "+" | "-" = it.direction === "in" ? "+" : "-";
+                    const { title, subtitle } = labelFor(it);
+
+                    return (
+                      <li
+                        key={it.signature}
+                        className="px-4 py-3 grid grid-cols-12 gap-2 items-center hover:bg-white/[0.04] transition-colors"
+                      >
+                        {/* Time */}
+                        <div className="col-span-2 md:col-span-2">
+                          <div className="text-xs text-white/60">
+                            {fmtTime(it.blockTime)}
+                          </div>
+                        </div>
+
+                        {/* Description */}
+                        <div className="col-span-6 md:col-span-6 min-w-0">
+                          <div className="text-sm text-white/90 truncate">
+                            {title}
+                          </div>
+                          <div className="mt-1 flex items-center gap-2">
+                            {it.kind === "swap" ? (
+                              <TokenBoughtPill
+                                mint={it.swapBoughtMint}
+                                amountUi={it.swapBoughtAmountUi}
+                              />
+                            ) : null}
+                            {subtitle ? (
+                              <span className="text-xs text-white/50">
+                                {subtitle}
+                              </span>
+                            ) : null}
+                          </div>
+                        </div>
+
+                        {/* Amount (USDC + local) */}
+                        <div className="col-span-4 md:col-span-4 text-right">
+                          <div
+                            className={`text-sm font-semibold ${
+                              it.direction === "in"
+                                ? "text-[rgb(182,255,62)]"
+                                : "text-red-400"
+                            }`}
+                          >
+                            {fmtAmt(it.amountUi, sign)}
+                          </div>
+                          <div className="text-[11px] text-white/50">
+                            {it.amountUi.toFixed(2)} USDC
+                          </div>
+                        </div>
+
+                        {/* Explorer link */}
+                        <div className="col-span-12 mt-1 text-right text-[11px]">
+                          <a
+                            href={explorerTx(it.signature)}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-white/40 hover:text-white/70 hover:underline"
+                          >
+                            View on explorer →
+                          </a>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))}
+          </div>
+
+          {/* Pager */}
+          <div className="p-3 flex items-center justify-end">
             <button
               onClick={() => nextBefore && load(nextBefore)}
               disabled={!nextBefore || loading}
