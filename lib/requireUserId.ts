@@ -12,35 +12,37 @@ if (!PRIVY_APP_ID || !PRIVY_SECRET_KEY) {
   throw new Error("Missing PRIVY_APP_ID / PRIVY_SECRET_KEY");
 }
 
+// Verify-only client (no walletApi needed here)
 const privy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET_KEY);
 
+function readBearer(req: NextRequest): string | null {
+  const raw =
+    req.headers.get("authorization") ?? req.headers.get("Authorization") ?? "";
+  const lower = raw.toLowerCase();
+  if (!lower.startsWith("bearer ")) return null;
+  return raw.slice(7).trim();
+}
+
 export async function requireUserId(req: NextRequest): Promise<string> {
-  // 1) Cookie session (your existing flow)
+  // 1) App cookie (__session) → your own JWT with userId
   const cookieToken = req.cookies.get("__session")?.value ?? null;
   const cookieClaims = cookieToken ? verifySession(cookieToken) : null;
   if (cookieClaims?.userId) return cookieClaims.userId;
 
-  // 2) Privy bearer token (map privyId -> User)
-  const auth =
-    req.headers.get("authorization") || req.headers.get("Authorization");
-  if (auth?.startsWith("Bearer ")) {
-    const bearer = auth.slice(7).trim();
-    try {
-      const claims = await privy.verifyAuthToken(bearer);
-      const privyId = claims?.userId;
-      if (privyId) {
-        await connect();
-        const u = await User.findOne({ privyId })
-          .select("_id")
-          .lean<{ _id: unknown } | null>();
-        if (u?._id) return String(u._id);
-      }
-    } catch {
-      // fall through to dev escape hatch / error
-    }
+  // 2) Privy bearer → map privyId → your User record
+  const bearer = readBearer(req);
+  if (bearer) {
+    // Throws on invalid/expired token
+    const { userId: privyId } = await privy.verifyAuthToken(bearer);
+    if (!privyId) throw new Error("Unauthorized");
+
+    await connect();
+    const u = await User.findOne({ privyId }).select("_id").lean();
+    if (!u?._id) throw new Error("Unauthorized");
+    return String(u._id);
   }
 
-  // 3) Dev escape hatch (optional)
+  // 3) Non-prod dev escape hatch only
   if (process.env.NODE_ENV !== "production") {
     const devId = req.headers.get("x-dev-user-id");
     if (devId) return devId;

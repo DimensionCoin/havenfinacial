@@ -3,17 +3,44 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
+import { toast } from "react-hot-toast";
 import FullScreenLoader from "@/components/shared/FullScreenLoader";
 
 type PendingClaim = {
   id: string;
   createdAt: string;
-  amountUi: number;
+  amountUi: number; // shown only after auth
   note: string | null;
   senderEmail: string;
   escrowSignature: string | null;
   currency: string; // "USDC"
 };
+
+type ClaimApiOk = {
+  ok: true;
+  claimedCount: number;
+  signatures: string[];
+  redirect?: string;
+  traceId?: string;
+};
+
+type ClaimApiErr = {
+  ok?: false;
+  code?: string; // e.g. EMAIL_MISMATCH, TOKEN_EXPIRED, UNAUTHORIZED…
+  error?: string; // user-readable summary
+  hint?: string; // optional action
+  traceId?: string; // for support correlation
+  partial?: { claimedCount: number; signatures: string[] };
+};
+
+type ClaimApi = ClaimApiOk | ClaimApiErr;
+
+function isClaimOk(value: unknown): value is ClaimApiOk {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  if (record.ok !== true) return false;
+  return Array.isArray(record.signatures) && record.signatures.every((s) => typeof s === "string");
+}
 
 export default function ClaimClient({ token }: { token: string }) {
   const { ready, authenticated, login, getAccessToken } = usePrivy();
@@ -34,22 +61,24 @@ export default function ClaimClient({ token }: { token: string }) {
       try {
         const r = await fetch(
           `/api/email-claims/pending?token=${encodeURIComponent(token)}`,
-          {
-            credentials: "include",
-            cache: "no-store",
-          }
+          { credentials: "include", cache: "no-store" }
         );
-        const j = await r.json();
-        if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j?.ok) {
+          const m = j?.error || `Failed to load transfers (HTTP ${r.status})`;
+          throw new Error(m);
+        }
         if (!cancelled) {
-          setClaims(j.claims || []);
+          setClaims(Array.isArray(j.claims) ? j.claims : []);
           setTotal(Number(j.totalAmountUi || 0));
         }
       } catch (e) {
-        if (!cancelled)
-          setListErr(
-            e instanceof Error ? e.message : "Failed to load transfers"
-          );
+        const message =
+          e instanceof Error ? e.message : "Failed to load transfers";
+        if (!cancelled) {
+          setListErr(message);
+          toast.error(message);
+        }
       } finally {
         if (!cancelled) setLoadingList(false);
       }
@@ -70,14 +99,18 @@ export default function ClaimClient({ token }: { token: string }) {
   );
 
   const claim = async () => {
+    const loadingId = toast.loading("Claiming your funds…");
     setSubmitting(true);
     setMsg(null);
+
     try {
-      // Pass a Privy access token if available (helps your API accept bearer)
+      // Include a Privy access token if available (your API accepts bearer)
       let access: string | null = null;
       try {
         access = (await getAccessToken()) || null;
-      } catch {}
+      } catch {
+        /* ignore */
+      }
 
       const res = await fetch("/api/email-claims/claim", {
         method: "POST",
@@ -89,18 +122,72 @@ export default function ClaimClient({ token }: { token: string }) {
         body: JSON.stringify({ token }),
       });
 
-      const j = await res.json();
-      if (!res.ok) throw new Error(j?.error || `HTTP ${res.status}`);
+      const data = (await res.json().catch(() => ({}))) as ClaimApi;
 
+      // Branch 1: HTTP error → treat as ClaimApiErr
+      if (!res.ok) {
+        const err = data as ClaimApiErr;
+        const code = err.code ?? `HTTP_${res.status}`;
+        const base = err.error || "Claim failed.";
+        const hint = err.hint ? ` ${err.hint}` : "";
+        const trace = err.traceId ? ` (Ref: ${err.traceId})` : "";
+
+        // Friendly buckets by code
+        if (
+          code === "UNAUTHORIZED" ||
+          code === "EMAIL_MISMATCH" ||
+          code === "TOKEN_EXPIRED" ||
+          code === "TOKEN_INVALID" ||
+          code === "ESCROW_FUNDS_INSUFFICIENT"
+        ) {
+          toast.error(`${base}${hint}${trace}`, { id: loadingId });
+        } else if (
+          code === "RPC_BLOCKHASH_EXPIRED" ||
+          code === "PRIVY_RATE_LIMITED"
+        ) {
+          toast.error(`${base} Please try again.${trace}`, { id: loadingId });
+        } else {
+          toast.error(`${base}${hint}${trace}`, { id: loadingId });
+        }
+
+        setSubmitting(false);
+        return;
+      }
+
+      // Branch 2: HTTP OK but payload is not ok → treat as logical error
+      if (!isClaimOk(data)) {
+        const err = data as ClaimApiErr;
+        const base = err.error || "Claim failed.";
+        const hint = err.hint ? ` ${err.hint}` : "";
+        const trace = err.traceId ? ` (Ref: ${err.traceId})` : "";
+        toast.error(`${base}${hint}${trace}`, { id: loadingId });
+        setSubmitting(false);
+        return;
+      }
+
+      // Branch 3: success
+      const claimedCount = Number(data.claimedCount || 0);
+      const redirect = data.redirect || "/onboarding";
+
+      toast.success(
+        `Claimed ${claimedCount} transfer${
+          claimedCount === 1 ? "" : "s"
+        }. Redirecting…`,
+        { id: loadingId }
+      );
       setMsg(
-        `Claimed ${j.claimedCount || 0} transfer${
-          (j.claimedCount || 0) === 1 ? "" : "s"
+        `Claimed ${claimedCount} transfer${
+          claimedCount === 1 ? "" : "s"
         }. Redirecting…`
       );
       setTimeout(() => {
-        window.location.assign(j.redirect || "/onboarding");
+        window.location.assign(redirect);
       }, 800);
     } catch (e) {
+      toast.dismiss(loadingId);
+      toast.error(
+        e instanceof Error ? e.message : "Claim failed. Please try again."
+      );
       setMsg(e instanceof Error ? e.message : "Claim failed");
     } finally {
       setSubmitting(false);
@@ -108,6 +195,9 @@ export default function ClaimClient({ token }: { token: string }) {
   };
 
   if (!ready) return <FullScreenLoader message="Preparing secure claim…" />;
+
+  // Hide amounts until the user is signed in
+  const showAmounts = authenticated;
 
   return (
     <div className="min-h-[70vh] grid place-items-center px-4">
@@ -133,31 +223,38 @@ export default function ClaimClient({ token }: { token: string }) {
             <div className="space-y-2">
               <div className="text-sm text-zinc-400">Pending transfers:</div>
               <div className="divide-y divide-white/10 rounded-lg border border-white/10">
-                {claims.map((c) => (
-                  <div key={c.id} className="p-3 text-sm flex flex-col gap-1">
-                    <div className="flex justify-between">
-                      <div className="text-white font-medium">
-                        {new Intl.NumberFormat(undefined, {
-                          style: "currency",
-                          currency: "USD",
-                          maximumFractionDigits: 2,
-                        }).format(c.amountUi)}
+                {claims.map((c) => {
+                  const created = new Date(c.createdAt).toLocaleString();
+                  return (
+                    <div key={c.id} className="p-3 text-sm flex flex-col gap-1">
+                      <div className="flex justify-between">
+                        <div className="text-white font-medium">
+                          {showAmounts ? (
+                            new Intl.NumberFormat(undefined, {
+                              style: "currency",
+                              currency: "USD",
+                              maximumFractionDigits: 2,
+                            }).format(c.amountUi)
+                          ) : (
+                            <span className="text-zinc-400">
+                              Sign in to view
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-xs text-zinc-400">{created}</div>
                       </div>
                       <div className="text-xs text-zinc-400">
-                        {new Date(c.createdAt).toLocaleString()}
+                        From:{" "}
+                        <span className="text-zinc-300">{c.senderEmail}</span>
                       </div>
+                      {c.note && (
+                        <div className="text-xs text-zinc-300 italic">
+                          “{c.note}”
+                        </div>
+                      )}
                     </div>
-                    <div className="text-xs text-zinc-400">
-                      From:{" "}
-                      <span className="text-zinc-300">{c.senderEmail}</span>
-                    </div>
-                    {c.note && (
-                      <div className="text-xs text-zinc-300 italic">
-                        “{c.note}”
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               <div className="flex justify-between text-sm pt-2">
@@ -166,7 +263,7 @@ export default function ClaimClient({ token }: { token: string }) {
                   {claims.length === 1 ? "transfer" : "transfers"}):
                 </span>
                 <span className="text-[rgb(182,255,62)] font-semibold">
-                  {totalFmt} USD
+                  {showAmounts ? totalFmt + " USD" : "—"}
                 </span>
               </div>
             </div>
@@ -176,7 +273,8 @@ export default function ClaimClient({ token }: { token: string }) {
         {!authenticated ? (
           <>
             <p className="text-sm text-zinc-300 text-center">
-              To claim, sign in with the email that received the invite.
+              To claim, sign in with the email that received the invite. We’ll
+              show amounts after you’re signed in.
             </p>
             <button
               onClick={() => login()}
@@ -199,7 +297,9 @@ export default function ClaimClient({ token }: { token: string }) {
               {submitting
                 ? "Claiming…"
                 : claims.length > 0
-                ? `Claim all (${totalFmt}) USD`
+                ? showAmounts
+                  ? `Claim all (${totalFmt}) USD`
+                  : "Claim all"
                 : "Nothing to claim"}
             </button>
           </>

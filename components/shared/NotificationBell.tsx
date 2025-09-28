@@ -96,6 +96,7 @@ export default function NotificationBell({
 
   const unseen = items.reduce((n, it) => (it.seen ? n : n + 1), 0);
 
+  /** Auth header builder; only returns a bearer if fully ready + authed */
   const getAuthHeaders = useCallback(async (): Promise<HeadersInit> => {
     if (!ready || !authenticated) return {};
     try {
@@ -106,7 +107,9 @@ export default function NotificationBell({
     }
   }, [ready, authenticated, getAccessToken]);
 
+  /** Load notifications – **never** runs unless ready + authenticated */
   const load = useCallback(async () => {
+    if (!ready || !authenticated) return; // hard guard
     setLoading(true);
     setLastError(null);
     try {
@@ -120,13 +123,23 @@ export default function NotificationBell({
     } finally {
       setLoading(false);
     }
-  }, [limit, getAuthHeaders]);
+  }, [limit, getAuthHeaders, ready, authenticated]);
 
+  /** Initial + auth-state reload */
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || !authenticated) return;
     void load();
-  }, [ready, load]);
+  }, [ready, authenticated, load]);
 
+  /** Clear any stale items on logout to avoid showing another user's feed */
+  useEffect(() => {
+    if (!authenticated) {
+      setItems([]);
+      setLastError(null);
+    }
+  }, [authenticated]);
+
+  /** Polling (only when authenticated) */
   useEffect(() => {
     if (!pollMs || pollMs <= 0) return;
     if (!ready || !authenticated) return;
@@ -134,12 +147,12 @@ export default function NotificationBell({
     return () => clearInterval(id);
   }, [pollMs, ready, authenticated, load]);
 
-  // Mark read when opened
+  /** Mark read when drawer opens (only when authenticated) */
   useEffect(() => {
-    if (!open) return;
+    if (!open || !authenticated) return;
     let cancelled = false;
     const run = async () => {
-      if (items.every((i) => i.seen)) return;
+      if (items.length === 0 || items.every((i) => i.seen)) return;
       setMarking(true);
       try {
         const headers = await getAuthHeaders();
@@ -157,9 +170,9 @@ export default function NotificationBell({
     return () => {
       cancelled = true;
     };
-  }, [open, items, getAuthHeaders]);
+  }, [open, authenticated, items, getAuthHeaders]);
 
-  // FX load
+  /** FX load (only when authenticated) */
   useEffect(() => {
     let cancelled = false;
     async function loadFx() {
@@ -231,9 +244,10 @@ export default function NotificationBell({
     return `${s.slice(0, 4)}…${s.slice(-4)}`;
   };
 
-  // On-the-fly address -> user name
+  // On-the-fly address -> user name (no-op if not authed)
   const resolveSenderName = useCallback(
     async (owner58: string): Promise<string | null> => {
+      if (!authenticated) return null;
       const cached = nameCacheRef.current.get(owner58);
       if (cached !== undefined) return cached;
 
@@ -265,11 +279,12 @@ export default function NotificationBell({
         pendingRef.current.delete(owner58);
       }
     },
-    [getAuthHeaders]
+    [authenticated, getAuthHeaders]
   );
 
   // Kick off resolves for any transfers with an address but no fromName
   useEffect(() => {
+    if (!authenticated) return;
     const addresses = new Set<string>();
     for (const it of items) {
       const t = (it.type || "").toLowerCase();
@@ -310,7 +325,7 @@ export default function NotificationBell({
         })
       );
     });
-  }, [items, resolveSenderName]);
+  }, [items, authenticated, resolveSenderName]);
 
   // Render message; prefer cache if fromName is absent
   const renderMessage = useCallback(
@@ -405,7 +420,7 @@ export default function NotificationBell({
                   <button
                     onClick={() => void load()}
                     className="vision-button text-xs px-3 py-1.5 rounded-lg text-foreground/80 hover:text-foreground disabled:opacity-50 disabled:cursor-not-allowed"
-                    disabled={loading || marking}
+                    disabled={loading || marking || !authenticated}
                   >
                     {loading ? "Refreshing…" : "Refresh"}
                   </button>

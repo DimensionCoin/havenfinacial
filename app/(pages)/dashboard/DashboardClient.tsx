@@ -1,5 +1,6 @@
 "use client";
 
+import PendingEmailClaims from "@/components/shared/PendingEmailClaims";
 import nextDynamic from "next/dynamic";
 
 // Lightweight client-only skeletons shown while chunks load
@@ -55,6 +56,7 @@ export default function DashboardClient() {
     <main className="py-3 px-4">
       <Hero />
       <div className="mt-2 space-y-8">
+        <PendingEmailClaims />
         <DepositAccount />
         <SavingsAccount />
         <InvestAccount />
