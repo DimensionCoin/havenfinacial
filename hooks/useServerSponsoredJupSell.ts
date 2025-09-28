@@ -4,6 +4,17 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { VersionedTransaction } from "@solana/web3.js";
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
+import { Buffer } from "buffer";
+
+declare global {
+  interface Window {
+    Buffer?: typeof Buffer;
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.Buffer = window.Buffer || Buffer;
+}
 
 type SellInput = {
   fromOwnerBase58: string; // user token authority
@@ -19,6 +30,48 @@ type State = {
   signature: string | null;
   error: string | null;
 };
+
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function readStringProp(obj: JsonObject, key: string): string | null {
+  return readString(obj[key]);
+}
+
+function extractErrorField(obj: JsonObject): string | null {
+  const raw = obj.error;
+  if (raw instanceof Error) return raw.message;
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object" && "message" in raw) {
+    const maybe = (raw as { message?: unknown }).message;
+    if (typeof maybe === "string") return maybe;
+  }
+  return null;
+}
+
+function logsTail(obj: JsonObject, lines = 10): string | null {
+  const raw = obj.logs;
+  if (!Array.isArray(raw)) return null;
+  const logs = raw.filter((entry): entry is string => typeof entry === "string");
+  return logs.length ? logs.slice(-lines).join("\n") : null;
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object" && "message" in err) {
+    const maybe = (err as { message?: unknown }).message;
+    if (typeof maybe === "string") return maybe;
+  }
+  return fallback;
+}
 
 export function useServerSponsoredJupSell() {
   const [{ loading, signature, error }, set] = useState<State>({
@@ -73,15 +126,17 @@ export function useServerSponsoredJupSell() {
           }),
         });
 
-        const buildJson = await buildRes.json().catch(() => ({}));
-        if (!buildRes.ok || !buildJson?.transaction) {
-          throw new Error(
-            buildJson?.error || `Build failed: HTTP ${buildRes.status}`
-          );
+        const buildJsonRaw = await buildRes.json().catch(() => ({}));
+        const buildJson = isJsonObject(buildJsonRaw) ? buildJsonRaw : {};
+        const transaction = readStringProp(buildJson, "transaction");
+        if (!buildRes.ok || !transaction) {
+          const msg =
+            extractErrorField(buildJson) || `Build failed: HTTP ${buildRes.status}`;
+          throw new Error(msg);
         }
 
         // 2) USER SIG — deserialize, user signs, re-serialize
-        const unsigned = Buffer.from(buildJson.transaction as string, "base64");
+        const unsigned = Buffer.from(transaction, "base64");
         const tx = VersionedTransaction.deserialize(unsigned);
 
         const userSigned = await userWallet.signTransaction(tx);
@@ -98,27 +153,32 @@ export function useServerSponsoredJupSell() {
           body: JSON.stringify({ transaction: userSignedB64 }),
         });
 
-        const sendJson = await sendRes.json().catch(() => ({}));
-        if (!sendRes.ok || !sendJson?.signature) {
+        const sendJsonRaw = await sendRes.json().catch(() => ({}));
+        const sendJson = isJsonObject(sendJsonRaw) ? sendJsonRaw : {};
+        const signature = readStringProp(sendJson, "signature");
+        if (!sendRes.ok || !signature) {
+          const parts: string[] = [];
+          const errField = extractErrorField(sendJson);
+          if (errField) parts.push(errField);
+          const logs = logsTail(sendJson);
+          if (logs) parts.push(logs);
           const msg =
-            sendJson?.error ||
-            (sendJson?.logs
-              ? `${sendJson.error}\n${(sendJson.logs as string[]).join("\n")}`
-              : `Broadcast failed: HTTP ${sendRes.status}`);
+            parts.join("\n\n") || `Broadcast failed: HTTP ${sendRes.status}`;
           throw new Error(msg);
         }
 
         set({
           loading: false,
-          signature: sendJson.signature as string,
+          signature,
           error: null,
         });
-        return sendJson.signature as string;
-      } catch (e: any) {
+        return signature;
+      } catch (e: unknown) {
+        const message = errorMessage(e, "Sell failed");
         set({
           loading: false,
           signature: null,
-          error: e?.message || String(e),
+          error: message,
         });
         throw e;
       } finally {

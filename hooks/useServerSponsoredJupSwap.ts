@@ -5,6 +5,17 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
 import { VersionedTransaction, PublicKey } from "@solana/web3.js";
+import { Buffer } from "buffer";
+
+declare global {
+  interface Window {
+    Buffer?: typeof Buffer;
+  }
+}
+
+if (typeof window !== "undefined") {
+  window.Buffer = window.Buffer || Buffer;
+}
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
 const FLAT_FEE_USD = 0.25;
@@ -28,7 +39,7 @@ type HttpDebug = {
   durationMs: number;
   headers: Record<string, string>;
   rawText: string | null;
-  json: any; // best-effort parsed
+  json: unknown; // best-effort parsed
 };
 
 export type SwapAttemptDebug = {
@@ -63,12 +74,12 @@ function headersToRecord(h: Headers) {
 async function fetchWithDebug(
   url: string,
   init: RequestInit
-): Promise<HttpDebug & { res: Response }> {
+): Promise<(HttpDebug & { res: Response })> {
   const t0 =
     typeof performance !== "undefined" ? performance.now() : Date.now();
   const res = await fetch(url, init);
   const rawText = await res.text().catch(() => null);
-  let json: any = null;
+  let json: unknown = null;
   try {
     json = rawText ? JSON.parse(rawText) : null;
   } catch {}
@@ -88,8 +99,19 @@ async function fetchWithDebug(
   };
 }
 
-function shortLogs(j: any, maxLines = 10) {
-  const logs = Array.isArray(j?.logs) ? (j.logs as string[]) : [];
+type JsonObject = Record<string, unknown>;
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function shortLogs(input: unknown, maxLines = 10) {
+  if (!isJsonObject(input) || !Array.isArray(input.logs)) return null;
+  const logs = input.logs.filter((item): item is string => typeof item === "string");
   if (!logs.length) return null;
   const tail = logs.slice(-maxLines);
   return tail.join("\n");
@@ -97,78 +119,89 @@ function shortLogs(j: any, maxLines = 10) {
 
 function printAttemptToConsole(tag: string, dbg: SwapAttemptDebug) {
   const title = `[${tag}] swap attempt ${dbg.attemptId}`;
-  // eslint-disable-next-line no-console
   console.groupCollapsed(title);
-  // eslint-disable-next-line no-console
   console.log("inputs", dbg.inputs);
 
   if (dbg.build) {
-    // eslint-disable-next-line no-console
     console.groupCollapsed(
       "build",
       `${dbg.build.status} ${dbg.build.ok ? "OK" : "ERROR"} • ${
         dbg.build.durationMs
       }ms`
     );
-    // eslint-disable-next-line no-console
     console.log("request", { url: dbg.build.url, method: dbg.build.method });
-    // eslint-disable-next-line no-console
     console.log("response.headers", dbg.build.headers);
-    // eslint-disable-next-line no-console
     console.log("response.json", dbg.build.json);
     if (!dbg.build.json && dbg.build.rawText) {
-      // eslint-disable-next-line no-console
       console.log("response.text", dbg.build.rawText);
     }
-    // eslint-disable-next-line no-console
     console.groupEnd();
   }
 
   if (dbg.send) {
-    // eslint-disable-next-line no-console
+    const sendJson = dbg.send.json;
     console.groupCollapsed(
       "send",
       `${dbg.send.status} ${dbg.send.ok ? "OK" : "ERROR"} • ${
         dbg.send.durationMs
       }ms`
     );
-    // eslint-disable-next-line no-console
     console.log("request", { url: dbg.send.url, method: dbg.send.method });
-    // eslint-disable-next-line no-console
     console.log("response.headers", dbg.send.headers);
-    // eslint-disable-next-line no-console
-    console.log("response.json", dbg.send.json);
+    console.log("response.json", sendJson);
 
-    const ixSummary = dbg.send.json?.debug?.ixSummary;
-    if (ixSummary) {
-      // eslint-disable-next-line no-console
-      console.log("ixSummary", ixSummary);
+    let debugInfo: JsonObject | null = null;
+    if (isJsonObject(sendJson) && isJsonObject(sendJson.debug)) {
+      debugInfo = sendJson.debug;
     }
-    const alts = dbg.send.json?.debug?.alts;
-    if (alts) {
-      // eslint-disable-next-line no-console
-      console.log("alts", alts);
+    if (debugInfo && "ixSummary" in debugInfo) {
+      console.log("ixSummary", debugInfo.ixSummary);
+    }
+    if (debugInfo && "alts" in debugInfo) {
+      console.log("alts", debugInfo.alts);
     }
 
-    const logsTail = shortLogs(dbg.send.json);
+    const logsTail = shortLogs(sendJson);
     if (logsTail) {
-      // eslint-disable-next-line no-console
       console.log("logs (tail)", logsTail);
     }
 
-    if (!dbg.send.json && dbg.send.rawText) {
-      // eslint-disable-next-line no-console
+    if (!sendJson && dbg.send.rawText) {
       console.log("response.text", dbg.send.rawText);
     }
-    // eslint-disable-next-line no-console
     console.groupEnd();
   }
-  // eslint-disable-next-line no-console
   console.groupEnd();
 }
 
 function makeAttemptId() {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function readStringProp(obj: JsonObject, key: string): string | null {
+  return readString(obj[key]);
+}
+
+function extractErrorField(obj: JsonObject): string | null {
+  const raw = obj.error;
+  if (raw instanceof Error) return raw.message;
+  if (typeof raw === "string") return raw;
+  if (raw && typeof raw === "object" && "message" in raw) {
+    const maybe = (raw as { message?: unknown }).message;
+    if (typeof maybe === "string") return maybe;
+  }
+  return null;
+}
+
+type AugmentedError = Error & {
+  __retryableSession?: boolean;
+  __server?: unknown;
+};
+
+function markError<T extends Error>(err: T, extra: Partial<AugmentedError>) {
+  const enriched = err as AugmentedError;
+  Object.assign(enriched, extra);
+  return enriched;
 }
 
 /* ---------------------------- main hook --------------------------- */
@@ -238,11 +271,12 @@ export function useServerSponsoredJupSwap() {
       }));
       printAttemptToConsole("BUILD", attempt);
 
-      if (!build.ok || !build.json?.transaction) {
-        const msg = build.json?.error || `Build failed: HTTP ${build.status}`;
-        const err: any = new Error(msg);
-        err.__server = build.json;
-        throw err;
+      const buildJson = isJsonObject(build.json) ? build.json : {};
+      const transaction = readStringProp(buildJson, "transaction");
+      if (!build.ok || !transaction) {
+        const msg =
+          extractErrorField(buildJson) || `Build failed: HTTP ${build.status}`;
+        throw markError(new Error(msg), { __server: build.json });
       }
 
       /* 2) USER SIG (client) — sign the VersionedTransaction with the user's embedded wallet */
@@ -255,14 +289,20 @@ export function useServerSponsoredJupSwap() {
       }
 
       // Deserialize → sign → serialize
-      const unsignedBytes = Buffer.from(build.json.transaction, "base64");
+      const unsignedBytes = Buffer.from(transaction, "base64");
       const unsignedTx = VersionedTransaction.deserialize(unsignedBytes);
 
       // Safety: make sure the user’s pubkey is actually one of the required signers
-      const required =
-        (unsignedTx.message.header.numRequiredSignatures ?? 0) >>> 0;
-      const staticKeys = (unsignedTx.message as any)
-        .staticAccountKeys as PublicKey[];
+      type MessageWithKeys = {
+        header?: { numRequiredSignatures?: number };
+        staticAccountKeys?: PublicKey[];
+      };
+
+      const message = unsignedTx.message as unknown as MessageWithKeys;
+      const required = Number(message.header?.numRequiredSignatures ?? 0);
+      const staticKeys = Array.isArray(message.staticAccountKeys)
+        ? message.staticAccountKeys
+        : [];
       const signerKeys = staticKeys
         .slice(0, required)
         .map((k) => (k instanceof PublicKey ? k : new PublicKey(k)));
@@ -298,30 +338,42 @@ export function useServerSponsoredJupSwap() {
       printAttemptToConsole("SEND", attempt);
 
       // special case: expired user session (if your server uses it)
+      const sendJson = isJsonObject(send.json) ? send.json : {};
       if (send.status === 440) {
-        const err: any = new Error(send.json?.error || "User session expired");
-        err.__retryableSession = true;
-        err.__server = send.json;
-        throw err;
+        const msg =
+          extractErrorField(sendJson) || "User session expired";
+        throw markError(new Error(msg), {
+          __retryableSession: true,
+          __server: send.json,
+        });
       }
 
-      if (!send.ok || !send.json?.signature) {
+      const signature = readStringProp(sendJson, "signature");
+      if (!send.ok || !signature) {
         const parts: string[] = [];
-        if (send.json?.error) parts.push(String(send.json.error));
-        const tail = shortLogs(send.json);
+        const errorField = extractErrorField(sendJson);
+        if (errorField) parts.push(errorField);
+        const tail = shortLogs(sendJson);
         if (tail) parts.push(tail);
-        if (send.json?.debug?.ixSummary) {
-          parts.push("ixSummary: " + JSON.stringify(send.json.debug.ixSummary));
+        if (
+          isJsonObject(sendJson.debug) &&
+          sendJson.debug !== null &&
+          "ixSummary" in sendJson.debug
+        ) {
+          parts.push(
+            "ixSummary: " +
+              JSON.stringify(
+                (sendJson.debug as Record<string, unknown>).ixSummary
+              )
+          );
         }
         const msg = parts.length
           ? parts.join("\n\n")
           : `Broadcast failed: HTTP ${send.status}\n${send.rawText ?? ""}`;
-        const err: any = new Error(msg);
-        err.__server = send.json;
-        throw err;
+        throw markError(new Error(msg), { __server: send.json });
       }
 
-      return send.json.signature as string;
+      return signature;
     },
     [wallets]
   );
@@ -382,8 +434,9 @@ export function useServerSponsoredJupSwap() {
           });
           setState((s) => ({ ...s, loading: false, signature: sig }));
           return sig;
-        } catch (err: any) {
-          if (err?.__retryableSession) {
+        } catch (err: unknown) {
+          const enriched = err as AugmentedError;
+          if (enriched.__retryableSession) {
             // refresh user session and retry once
             await login();
             const fresh = await getAccessToken();
@@ -401,14 +454,14 @@ export function useServerSponsoredJupSwap() {
           }
           throw err;
         }
-      } catch (e: any) {
-        const message = e?.message || String(e);
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : String(e);
         setState((s) => ({ ...s, loading: false, error: message }));
         // eslint-disable-next-line no-console
         console.error(
           "[useServerSponsoredJupSwap] failed:",
           message,
-          e?.__server || {}
+          (e as AugmentedError)?.__server || {}
         );
         throw e;
       } finally {

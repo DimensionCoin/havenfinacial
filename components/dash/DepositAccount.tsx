@@ -1,10 +1,11 @@
 "use client";
 
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { usePrivy } from "@privy-io/react-auth";
 import { useUser } from "@/providers/UserProvider";
+import { useBalances } from "@/providers/BalanceProvider";
+import { usePrivy } from "@privy-io/react-auth";
 import { toast } from "react-hot-toast";
 import { Download, Upload, ArrowRightLeft, X } from "lucide-react";
 import Buy from "@/components/actions/Buy";
@@ -13,32 +14,9 @@ import UserTransfer from "@/components/actions/UserTransfer";
 import Sell from "@/components/actions/Sell";
 import Withdraw from "@/components/actions/Withdraw";
 import CancelTransfer from "@/components/actions/CancelTransfer";
-import { Connection, PublicKey } from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-} from "@solana/spl-token";
-
-/* ----------------------------- ENV (public) ------------------------------ */
-const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
-const USDC_MINT = (() => {
-  const m = process.env.NEXT_PUBLIC_USDC_MINT;
-  return m ? new PublicKey(m) : null;
-})();
-
-/* --------------------------- Types from /api/fx --------------------------- */
-type FxResponse = {
-  base: "USD";
-  target: string;
-  rate: number; // USD -> target
-  amount: number; // USDC amount converted
-  converted: number; // amount * rate
-  asOf?: string | null;
-};
+import { PublicKey } from "@solana/web3.js";
 
 /* --------------------------------- Utils --------------------------------- */
-/** "$2.00" using narrow symbol, independent of locale currency placement */
 function formatFiatNarrow(n: number, currency: string) {
   try {
     const nf = new Intl.NumberFormat(undefined, {
@@ -53,118 +31,18 @@ function formatFiatNarrow(n: number, currency: string) {
       .filter((p) => p.type !== "currency")
       .map((p) => p.value)
       .join("");
-    return `${sym}${number}`; // e.g. "$2.00"
+    return `${sym}${number}`;
   } catch {
     return n.toFixed(2);
   }
 }
-
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const id = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
-    p.then(
-      (v) => {
-        clearTimeout(id);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(id);
-        reject(e);
-      }
-    );
-  });
-}
-
 function mask(addr?: string | null): string {
   if (!addr || addr.length < 8) return "****-****-0000";
   return `${addr.slice(0, 4)}-****-****-${addr.slice(-4)}`;
 }
-
 function maskMobile(addr?: string | null): string {
   if (!addr || addr.length < 4) return "-****-0000";
   return `-****-${addr.slice(-4)}`;
-}
-
-/* ---------------------------- SPL helpers -------------------------------- */
-const programIdCache = new Map<string, PublicKey>();
-
-async function detectTokenProgramForMint(
-  conn: Connection,
-  mint: PublicKey
-): Promise<PublicKey> {
-  const key = mint.toBase58();
-  const cached = programIdCache.get(key);
-  if (cached) return cached;
-
-  const info = await conn.getAccountInfo(mint, "confirmed");
-  const owner = info?.owner?.toBase58();
-  const pid =
-    owner === TOKEN_2022_PROGRAM_ID.toBase58()
-      ? TOKEN_2022_PROGRAM_ID
-      : TOKEN_PROGRAM_ID;
-
-  programIdCache.set(key, pid);
-  return pid;
-}
-
-async function getAtaUiBalanceWithProgram(
-  conn: Connection,
-  mint: PublicKey,
-  owner: PublicKey,
-  tokenProgramId: PublicKey
-): Promise<number> {
-  try {
-    const ata = getAssociatedTokenAddressSync(
-      mint,
-      owner,
-      false,
-      tokenProgramId
-    );
-    const bal = await conn.getTokenAccountBalance(ata, "confirmed");
-    return Number(bal?.value?.uiAmount ?? 0);
-  } catch {
-    return 0;
-  }
-}
-
-async function fetchUsdcBalanceForOwner(
-  conn: Connection,
-  mint: PublicKey,
-  owner58?: string | null,
-  cachedAta?: string | null
-): Promise<number> {
-  if (!owner58) return 0;
-  const owner = new PublicKey(owner58);
-
-  // Try cached ATA (if you stored it in user.tokenAccounts.usdc2022.depositAta)
-  const viaCached = (async () => {
-    if (!cachedAta) return 0;
-    try {
-      const bal = await conn.getTokenAccountBalance(
-        new PublicKey(cachedAta),
-        "confirmed"
-      );
-      return Number(bal?.value?.uiAmount ?? 0);
-    } catch {
-      return 0;
-    }
-  })();
-
-  const detectedProgram = await detectTokenProgramForMint(conn, mint);
-  const viaDetected = getAtaUiBalanceWithProgram(
-    conn,
-    mint,
-    owner,
-    detectedProgram
-  );
-
-  const otherProgram = detectedProgram.equals(TOKEN_PROGRAM_ID)
-    ? TOKEN_2022_PROGRAM_ID
-    : TOKEN_PROGRAM_ID;
-  const viaOther = getAtaUiBalanceWithProgram(conn, mint, owner, otherProgram);
-
-  const [a, b, c] = await Promise.all([viaCached, viaDetected, viaOther]);
-  return Math.max(a, b, c);
 }
 
 /* --------------------------------- Types --------------------------------- */
@@ -201,118 +79,79 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
 }) => {
   const { user, loading: userLoading } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
+  const balances = useBalances();
 
-  const walletAddress = user?.depositWallet?.address ?? null;
-  const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
+  // Source of truth: USD amount from the provider
+  const depositCtx = balances.deposit; // { amountUsd, loading, error, refresh }
+  const depositUsd = Number(depositCtx?.amountUsd ?? 0) || 0;
 
-  // local balance state (no reliance on UserProvider balances)
-  const [depositUsdc, setDepositUsdc] = useState<number>(0);
-  const [balLoading, setBalLoading] = useState<boolean>(false);
+  // Target currency (USDC -> USD)
+  const fiatCurrency = useMemo(() => {
+    const raw = (user?.displayCurrency || "USD").toUpperCase();
+    return raw === "USDC" ? "USD" : raw;
+  }, [user?.displayCurrency]);
 
-  const [fxLoading, setFxLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  // FX state (USD -> target)
   const [fxRate, setFxRate] = useState(1);
-  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
-  const modalOpen = activeModal !== null;
+  const [fxLoading, setFxLoading] = useState(false);
 
-  const loading = userLoading || balLoading || fxLoading;
-
-  // Build Solana connection once
-  const [conn] = useState(() => new Connection(RPC, "confirmed"));
-
-  // read balance when wallet or envs ready
-  const refreshBalances = useCallback(async () => {
-    if (!USDC_MINT) return;
-    setBalLoading(true);
-    try {
-      const cachedAta = user?.tokenAccounts?.usdc2022?.depositAta ?? null;
-      const amt = await fetchUsdcBalanceForOwner(
-        conn,
-        USDC_MINT,
-        walletAddress,
-        cachedAta
-      );
-      setDepositUsdc(amt);
-    } catch (e) {
-      console.error("balance fetch error", e);
-    } finally {
-      setBalLoading(false);
-    }
-  }, [conn, walletAddress, user?.tokenAccounts?.usdc2022?.depositAta]);
-
-  useEffect(() => {
-    if (!walletAddress || !USDC_MINT) return;
-    void refreshBalances();
-  }, [walletAddress, refreshBalances]);
-
-  /** Call /api/fx (USDC ≈ USD) to convert to local currency */
-  const convertFx = useCallback(
-    async (amount: number, currency: string): Promise<FxResponse> => {
-      const accessToken = authenticated
-        ? await getAccessToken().catch(() => null)
-        : null;
-      const url = `/api/fx?amount=${encodeURIComponent(
-        amount
-      )}&currency=${encodeURIComponent(currency)}`;
-
-      const resp = await withTimeout(
-        fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          credentials: "include",
-          headers: accessToken
-            ? { Authorization: `Bearer ${accessToken}` }
-            : {},
-        }),
-        8_000,
-        "FX fetch"
-      );
-
-      if (!resp.ok) throw new Error(await resp.text());
-      const data = (await resp.json()) as FxResponse;
-      if (
-        !data ||
-        data.base !== "USD" ||
-        !Number.isFinite(data.rate) ||
-        data.rate <= 0
-      ) {
-        throw new Error("Bad FX payload");
+  const fetchFx = useCallback(
+    async (amountUsd: number, currency: string) => {
+      if (currency === "USD") {
+        setFxRate(1);
+        return;
       }
-      return data;
-    },
-    [authenticated, getAccessToken]
-  );
-
-  // compute FX when balance/currency changes
-  useEffect(() => {
-    if (!ready || !authenticated) return;
-    let cancelled = false;
-
-    const run = async () => {
-      setErr(null);
-      if (displayCurrency === "USD") {
+      if (!ready || !authenticated) {
         setFxRate(1);
         return;
       }
       setFxLoading(true);
       try {
-        const fx = await convertFx(depositUsdc, displayCurrency);
-        if (!cancelled) setFxRate(fx.rate);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+        const token = await getAccessToken().catch(() => null);
+        // Use amount=1 so the URL is cacheable per currency; multiply locally
+        const url = new URL("/api/fx", window.location.origin);
+        url.searchParams.set("currency", currency);
+        url.searchParams.set("amount", "1");
+        const r = await fetch(url.toString(), {
+          credentials: "include",
+          cache: "no-store",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
+        const j = await r.json().catch(() => null);
+        const rate = r.ok && j?.rate ? Number(j.rate) : 1;
+        setFxRate(Number.isFinite(rate) && rate > 0 ? rate : 1);
+      } catch {
+        setFxRate(1);
       } finally {
-        if (!cancelled) setFxLoading(false);
+        setFxLoading(false);
       }
-    };
+    },
+    [ready, authenticated, getAccessToken]
+  );
 
-    void run();
-    return () => {
-      cancelled = true;
-    };
-  }, [ready, authenticated, depositUsdc, displayCurrency, convertFx]);
+  // Refresh FX when currency changes or on mount; USD amount multiplies locally
+  useEffect(() => {
+    void fetchFx(depositUsd, fiatCurrency);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fiatCurrency, fetchFx]);
 
-  const fiatValue = useMemo(() => depositUsdc * fxRate, [depositUsdc, fxRate]);
+  // Convert locally
+  const depositFiat = useMemo(() => depositUsd * fxRate, [depositUsd, fxRate]);
 
+  const walletAddress = user?.depositWallet?.address ?? null;
+
+  const loading = Boolean(userLoading || depositCtx?.loading || fxLoading);
+  const errRaw = depositCtx?.error; // string | null
+  const errMsg: string | null = typeof errRaw === "string" ? errRaw : null;
+
+  // Refresh just the deposit balance, then re-apply FX
+  const manualRefresh = useCallback(async () => {
+    await depositCtx?.refresh?.();
+    // re-use cached FX (if any) by just calling fetchFx to ensure freshness
+    void fetchFx(depositUsd, fiatCurrency);
+  }, [depositCtx, fetchFx, depositUsd, fiatCurrency]);
+
+  // Copy address
   const copyAccountNumber = useCallback(async () => {
     if (!walletAddress) return;
     try {
@@ -323,10 +162,9 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
     }
   }, [walletAddress]);
 
-  const manualRefresh = useCallback(async () => {
-    setErr(null);
-    await refreshBalances();
-  }, [refreshBalances]);
+  /* ------------------------------ Modal logic ------------------------------ */
+  const [activeModal, setActiveModal] = useState<ActiveModal>(null);
+  const modalOpen = activeModal !== null;
 
   const openDepositModal = useCallback(() => {
     if (disabled) return;
@@ -368,20 +206,11 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
     };
   }, [modalOpen]);
 
-  // Quick guard for misconfig
-  if (!USDC_MINT) {
-    return (
-      <div className="vision-glass rounded-2xl p-4 text-red-300 border-red-500/30">
-        Missing <code className="font-mono">NEXT_PUBLIC_USDC_MINT</code> env.
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6 vision-perspective">
-      {err && (
+      {errMsg && (
         <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-          {err}
+          {errMsg}
         </div>
       )}
 
@@ -389,12 +218,12 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
         {/* Background glow effect */}
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-        {/* Main glass window container */}
+        {/* Main glass window */}
         <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
           {/* Subtle inner glow */}
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
-          {/* Header section with status indicator */}
+          {/* Header */}
           <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
             <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
               <div className="relative flex-shrink-0">
@@ -403,7 +232,7 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
               </div>
               <div className="min-w-0 flex-1">
                 <h3 className="text-lg sm:text-xl lg:text-2xl font-bold text-white tracking-tight truncate">
-                  Deposit Account 
+                  Deposit Account
                 </h3>
                 <p className="text-xs sm:text-sm text-white/60 mt-1">
                   Available Funds
@@ -428,10 +257,10 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
             </button>
           </div>
 
+          {/* Figures */}
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
               <div className="flex flex-col gap-3">
-                {/* Balance and mobile account number row */}
                 <div className="flex items-baseline justify-between gap-3">
                   <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-1 min-w-0">
                     {loading ? (
@@ -442,16 +271,16 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
                     ) : (
                       <>
                         <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
-                          {formatFiatNarrow(fiatValue, displayCurrency)}
+                          {formatFiatNarrow(depositFiat, fiatCurrency)}
                         </span>
                         <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end sm:pb-1 lg:pb-2">
-                          {displayCurrency.toLowerCase()}
+                          {fiatCurrency.toLowerCase()}
                         </span>
                       </>
                     )}
                   </div>
 
-                  {/* Mobile account number - only visible on small screens */}
+                  {/* Mobile account number */}
                   <div className="sm:hidden flex-shrink-0">
                     <button
                       onClick={copyAccountNumber}
@@ -468,7 +297,7 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
               </div>
             </div>
 
-            {/* Desktop account number - only visible on larger screens */}
+            {/* Desktop account number */}
             <div className="hidden sm:block flex-shrink-0">
               <button
                 onClick={copyAccountNumber}
@@ -488,6 +317,7 @@ const DepositAccount: React.FC<DepositAccountProps> = ({
             </div>
           </div>
 
+          {/* Actions */}
           <div className="pt-4 sm:pt-6 border-t border-white/10">
             <div className="grid grid-cols-3 gap-3 sm:gap-4">
               <ActionButton
@@ -553,16 +383,11 @@ function ActionButton({
       aria-label={label}
       className="group relative overflow-hidden vision-button flex flex-col items-center justify-center gap-2 sm:gap-3 px-2 py-4 sm:px-3 sm:py-4 text-white/90 disabled:opacity-50 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-[1.02] active:scale-[0.98] hover:shadow-[0_8px_32px_rgba(182,255,62,0.15)]"
     >
-      {/* Enhanced shimmer effect on hover */}
       <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-
-      {/* Subtle glow effect */}
       <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[rgb(182,255,62)]/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-
       <div className="hidden sm:flex h-8 w-8 items-center justify-center rounded-xl bg-white/10 group-hover:bg-[rgb(182,255,62)]/20 group-hover:shadow-[0_0_20px_rgba(182,255,62,0.3)] transition-all duration-300 relative z-10">
         {icon}
       </div>
-
       <span className="text-sm sm:text-sm font-semibold tracking-wide relative z-10">
         {label}
       </span>
@@ -571,7 +396,6 @@ function ActionButton({
 }
 
 /* ------------------------------- Modals ------------------------------- */
-// Cast action components to accept props (their TS types may be empty)
 const WithdrawAny = Withdraw as unknown as React.FC<{
   depositOwner?: string;
   onSuccess?: (sig: string) => void;

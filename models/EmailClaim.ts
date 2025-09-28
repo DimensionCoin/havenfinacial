@@ -1,5 +1,5 @@
 // models/EmailClaim.ts
-import mongoose, { Schema, models, model } from "mongoose";
+import { Schema, models, model, type InferSchemaType, type Model } from "mongoose";
 
 export type EmailClaimStatus = "pending" | "claimed" | "canceled" | "expired";
 
@@ -46,15 +46,17 @@ const EmailClaimSchema = new Schema(
     versionKey: false,
     toJSON: {
       virtuals: true,
-      transform(_doc, ret: any) {
-        ret.id = ret._id?.toString();
-        delete ret._id;
+      transform(_doc, ret: Record<string, unknown>) {
+        if (ret._id) {
+          ret.id = String(ret._id);
+          delete ret._id;
+        }
         return ret;
       },
     },
   }
 );
 
-export type IEmailClaim = mongoose.InferSchemaType<typeof EmailClaimSchema>;
-export default (models.EmailClaim as mongoose.Model<IEmailClaim>) ||
+export type IEmailClaim = InferSchemaType<typeof EmailClaimSchema>;
+export default (models.EmailClaim as Model<IEmailClaim>) ||
   model<IEmailClaim>("EmailClaim", EmailClaimSchema);

@@ -5,6 +5,7 @@ export const dynamic = "force-static";
 import type React from "react";
 import Header from "@/components/shared/Header";
 import { UserProvider } from "@/providers/UserProvider";
+import { BalanceProvider } from "@/providers/BalanceProvider";
 
 export default function RootLayout({
   children,
@@ -14,10 +15,12 @@ export default function RootLayout({
   return (
     <div className="min-h-screen">
       <UserProvider>
-        <div className="">
-          <Header />
-        </div>
-        <div className="">{children}</div>
+        <BalanceProvider /* autoRefreshMs={30000} optional */>
+          <div>
+            <Header />
+          </div>
+          <div>{children}</div>
+        </BalanceProvider>
       </UserProvider>
     </div>
   );

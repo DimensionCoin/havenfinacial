@@ -2,35 +2,40 @@
 
 import { useEffect, useState } from "react";
 
+type NavigatorWithStandalone = Navigator & { standalone?: boolean };
+
+function isStandaloneDisplayMode() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(display-mode: standalone)").matches
+  );
+}
+
+function isIOSStandalone() {
+  if (typeof window === "undefined") return false;
+  const nav = window.navigator as NavigatorWithStandalone;
+  return nav.standalone === true;
+}
+
 export default function useStandalone() {
   const [standalone, setStandalone] = useState(false);
 
   useEffect(() => {
-    const isStandaloneNow =
-      (window.matchMedia &&
-        window.matchMedia("(display-mode: standalone)").matches) ||
-      // iOS PWA:
-      (window.navigator as any).standalone === true;
-
-    setStandalone(isStandaloneNow);
-
-    // Re-check on events that commonly indicate a mode change
-    const recheck = () => {
-      const s =
-        (window.matchMedia &&
-          window.matchMedia("(display-mode: standalone)").matches) ||
-        (window.navigator as any).standalone === true;
-      setStandalone(s);
+    const evaluate = () => {
+      setStandalone(isStandaloneDisplayMode() || isIOSStandalone());
     };
 
-    window.addEventListener("pageshow", recheck);
-    window.addEventListener("resize", recheck);
-    document.addEventListener("visibilitychange", recheck);
+    evaluate();
+
+    window.addEventListener("pageshow", evaluate);
+    window.addEventListener("resize", evaluate);
+    document.addEventListener("visibilitychange", evaluate);
 
     return () => {
-      window.removeEventListener("pageshow", recheck);
-      window.removeEventListener("resize", recheck);
-      document.removeEventListener("visibilitychange", recheck);
+      window.removeEventListener("pageshow", evaluate);
+      window.removeEventListener("resize", evaluate);
+      document.removeEventListener("visibilitychange", evaluate);
     };
   }, []);
 

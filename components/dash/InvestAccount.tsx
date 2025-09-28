@@ -15,6 +15,7 @@ import {
   getMintFor,
   type TokenMeta,
 } from "@/lib/tokens";
+import { useBalances } from "@/providers/BalanceProvider"; // ✅ NEW
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
 const JUP_PRICE_BASE =
@@ -73,9 +74,14 @@ async function fetchUsdPrices(ids: string[]) {
 function InvestAccountCard() {
   const { user } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
+  const balances = useBalances(); // ✅ NEW
 
   const owner58 = user?.depositWallet?.address || null;
-  const currency = (user?.displayCurrency || "USD").toUpperCase();
+  const currency = useMemo(() => {
+    const c = (user?.displayCurrency || "USD").toUpperCase();
+    return c === "USDC" ? "USD" : c; // ✅ normalize USDC -> USD
+  }, [user?.displayCurrency]);
+
   const cluster = getCluster();
 
   const supportedTokens = useMemo(() => tokensForCluster(cluster), [cluster]);
@@ -98,16 +104,20 @@ function InvestAccountCard() {
   const [hasLoaded, setHasLoaded] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [totalUsd, setTotalUsd] = useState(0);
+  // ❌ REMOVE local total used for display; keep positions
+  // const [totalUsd, setTotalUsd] = useState(0);
   const [fxRate, setFxRate] = useState(1);
   const [positions, setPositions] = useState<
     Array<{ token: TokenMeta; valueUsd: number }>
   >([]);
 
+  // ✅ Read the invest total USD from the BalanceProvider
+  const investSlice = balances.invest; // { amountUsd, loading, error, refresh }
+  const providerTotalUsd = Number(investSlice?.amountUsd ?? 0) || 0;
+
   const refreshHoldings = useCallback(async () => {
     if (!owner58) {
       setPositions([]);
-      setTotalUsd(0);
       setHasLoaded(true);
       return;
     }
@@ -129,10 +139,7 @@ function InvestAccountCard() {
 
       type ParsedTokenInfo = {
         mint?: string;
-        tokenAmount?: {
-          amount?: string;
-          decimals?: number;
-        };
+        tokenAmount?: { amount?: string; decimals?: number };
       };
 
       const add = (accs: typeof std) => {
@@ -145,6 +152,7 @@ function InvestAccountCard() {
           const mint = parsedInfo.mint;
           if (!mint || EXCLUDED_MINTS.has(mint) || !byClusterMint.has(mint))
             continue;
+
           const amtStr = parsedInfo.tokenAmount?.amount ?? "0";
           const decimals = Number(parsedInfo.tokenAmount?.decimals ?? 0);
           let raw: bigint;
@@ -185,10 +193,11 @@ function InvestAccountCard() {
 
       const filtered = rows.filter((r) => r.valueUsd >= 0.01);
       setPositions(filtered);
-      setTotalUsd(filtered.reduce((s, r) => s + r.valueUsd, 0));
+
+      // ❗️We no longer set a local total; display uses provider total:
+      // setTotalUsd(filtered.reduce((s, r) => s + r.valueUsd, 0));
     } catch {
       setPositions([]);
-      setTotalUsd(0);
     } finally {
       setHasLoaded(true);
       setRefreshing(false);
@@ -199,6 +208,7 @@ function InvestAccountCard() {
     void refreshHoldings();
   }, [refreshHoldings]);
 
+  // FX for display
   useEffect(() => {
     if (currency === "USD") return setFxRate(1);
     (async () => {
@@ -216,19 +226,25 @@ function InvestAccountCard() {
     })();
   }, [currency, ready, authenticated, getAccessToken]);
 
-  const fiatTotal = useMemo(() => totalUsd * fxRate, [totalUsd, fxRate]);
+  // ✅ Use the provider's USD total for the displayed amount
+  const fiatTotal = useMemo(
+    () => providerTotalUsd * fxRate,
+    [providerTotalUsd, fxRate]
+  );
 
+  // ✅ Refresh both: provider (total) and local positions
   const manualRefresh = useCallback(
-    (e?: React.MouseEvent<HTMLButtonElement>) => {
+    async (e?: React.MouseEvent<HTMLButtonElement>) => {
       if (e) {
         e.preventDefault();
         e.stopPropagation();
       }
-      return refreshHoldings();
+      await Promise.allSettled([investSlice?.refresh?.(), refreshHoldings()]);
     },
-    [refreshHoldings]
+    [investSlice, refreshHoldings]
   );
 
+  // empty state still uses positions only (unchanged look/logic)
   const showEmpty = hasLoaded && positions.length === 0;
   const hasAssets = !showEmpty;
 
@@ -239,10 +255,7 @@ function InvestAccountCard() {
       aria-label="Open Invest page"
     >
       <div className="relative group">
-        {/* Background glow */}
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-
-        {/* Card */}
         <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu cursor-pointer">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
@@ -263,7 +276,6 @@ function InvestAccountCard() {
               </div>
             </div>
 
-            {/* Refresh (prevents navigation) */}
             <button
               onClick={manualRefresh}
               disabled={refreshing || !owner58}
@@ -285,7 +297,7 @@ function InvestAccountCard() {
             </button>
           </div>
 
-          {/* Content: use a 2-col grid at ALL sizes to keep symmetry */}
+          {/* Content (unchanged layout) */}
           {hasAssets ? (
             <div className="grid grid-cols-2 items-end gap-4">
               {/* Balance (left) */}
@@ -348,7 +360,6 @@ function InvestAccountCard() {
               </div>
             </div>
           ) : (
-            // Empty state: keep grid symmetry too
             <div className="grid grid-cols-2 items-center gap-3">
               <div className="text-white/70 text-sm">
                 You don&apos;t have any assets yet.

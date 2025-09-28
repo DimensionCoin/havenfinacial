@@ -358,7 +358,7 @@ export default function ActivityList() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/10">
-                  {groups.map(([date, rows]) => (
+                  {groups.map(([date]) => (
                     <tr key={date} className="bg-white/[0.02]">
                       <td
                         colSpan={4}
@@ -382,7 +382,7 @@ export default function ActivityList() {
                     </>
                   ) : null}
 
-                  {groups.flatMap(([date, rows]) =>
+                  {groups.flatMap(([, rows]) =>
                     rows.map((it) => {
                       const sign: "+" | "-" = it.direction === "in" ? "+" : "-";
                       const { title, subtitle } = labelFor(it);

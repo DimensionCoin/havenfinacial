@@ -1,3 +1,4 @@
+// SavingsAccount.tsx
 "use client";
 
 import type React from "react";
@@ -11,7 +12,8 @@ import { useUser } from "@/providers/UserProvider";
 import type { VersionedTransaction } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
-import { useSavingsActions } from "@/hooks/useSavingsActions"; // deposit + withdraw
+import { useSavingsActions } from "@/hooks/useSavingsActions";
+import { useBalances } from "@/providers/BalanceProvider"; // ✅ NEW
 
 // Ensure Buffer exists in the browser
 if (typeof window !== "undefined") {
@@ -83,6 +85,7 @@ const SavingsAccount: React.FC = () => {
   const { user, loading: userLoading, refresh: refreshUser } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
   const { wallets: solWallets } = useSolanaWallets();
+  const balances = useBalances(); // ✅ NEW
 
   // First-time "open & deposit"
   const {
@@ -100,14 +103,19 @@ const SavingsAccount: React.FC = () => {
   } = useSavingsActions();
 
   const walletAddress = user?.depositWallet?.address ?? null;
-  const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
+  const displayCurrency = useMemo(() => {
+    const c = (user?.displayCurrency || "USD").toUpperCase();
+    return c === "USDC" ? "USD" : c; // normalize
+  }, [user?.displayCurrency]);
 
   const hasMarginfiAccount = !!user?.marginfi?.accountPk;
   const cachedAccountPk = user?.marginfi?.accountPk || null;
 
-  // local state
-  const [savingsUsdc, setSavingsUsdc] = useState<number>(0);
-  const [balLoading, setBalLoading] = useState<boolean>(false);
+  // ✅ Read savings balance from BalanceProvider (USD/USDC-pegged)
+  const savingsSlice = balances.savings;
+  const savingsUsdc = Number(savingsSlice?.amountUsd ?? 0) || 0;
+
+  // local flags (FX + page-level)
   const [fxLoading, setFxLoading] = useState<boolean>(false);
   const [fxRate, setFxRate] = useState<number>(1); // USD -> displayCurrency
   const [err, setErr] = useState<string | null>(null);
@@ -121,63 +129,29 @@ const SavingsAccount: React.FC = () => {
   const [modal, setModal] = useState<Modal>(null);
   const [openModal, setOpenModal] = useState(false);
 
+  // combine loading like before (replace balLoading with provider's loading)
   const loading =
-    userLoading || balLoading || fxLoading || hookLoading || actionsLoading;
+    userLoading ||
+    savingsSlice.loading ||
+    fxLoading ||
+    hookLoading ||
+    actionsLoading;
 
-  /* --------------------- Balance & FX ---------------------- */
-  const refreshBalance = useCallback(async (): Promise<void> => {
-    console.log("[UI] refreshBalance", { walletAddress, hasMarginfiAccount });
-    if (!walletAddress || !hasMarginfiAccount) {
-      setSavingsUsdc(0);
-      return;
-    }
-    setBalLoading(true);
-    try {
-      const r = await fetch(
-        `/api/savings/balance?owner58=${encodeURIComponent(walletAddress)}`,
-        { cache: "no-store" }
-      );
-      const raw = await r.text();
-      console.log("[UI] /api/savings/balance raw:", raw);
-      if (!r.ok) throw new Error(raw);
-      const j = JSON.parse(raw) as { amountUi?: number };
-      const amt = Number(j?.amountUi || 0);
-      console.log("[UI] parsed balance:", { amountUi: amt });
-      setSavingsUsdc(amt);
-    } catch (e) {
-      console.error("[UI] refreshBalance error:", e);
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBalLoading(false);
-    }
-  }, [walletAddress, hasMarginfiAccount]);
-
-  useEffect(() => {
-    if (!hasMarginfiAccount) return;
-    void refreshBalance();
-  }, [refreshBalance, hasMarginfiAccount]);
-
+  /* --------------------- APY (unchanged) ---------------------- */
   const refreshApy = useCallback(async (): Promise<void> => {
     if (!hasMarginfiAccount) {
       setApyPct(null);
       return;
     }
-
-    console.log("[UI] refreshApy start", { hasMarginfiAccount });
     setApyLoading(true);
     try {
       const r = await fetch(`/api/savings/apy`, { cache: "no-store" });
       const raw = await r.text();
-      console.log("[UI] /api/savings/apy raw:", raw);
       const j = JSON.parse(raw) as ApyApiResponse;
       if (!r.ok) throw new Error(j?.error || "Failed to fetch APY");
-
       const apyDecimal = typeof j.apy === "number" ? j.apy : null;
-      const pct = apyDecimal != null ? apyDecimal * 100 : null;
-      console.log("[UI] parsed APY:", { apyDecimal, pct });
-      setApyPct(pct);
-    } catch (e) {
-      console.error("[UI] refreshApy error:", e);
+      setApyPct(apyDecimal != null ? apyDecimal * 100 : null);
+    } catch {
       setApyPct(null);
     } finally {
       setApyLoading(false);
@@ -188,6 +162,7 @@ const SavingsAccount: React.FC = () => {
     void refreshApy();
   }, [refreshApy]);
 
+  /* --------------------- FX (unchanged) ---------------------- */
   const convertFx = useCallback(
     async (amount: number, currency: string): Promise<FxResponse> => {
       const accessToken = authenticated
@@ -209,14 +184,13 @@ const SavingsAccount: React.FC = () => {
         "FX fetch"
       );
       const raw = await resp.text();
-      console.log("[UI] /api/fx raw:", raw);
       if (!resp.ok) throw new Error(raw);
       return JSON.parse(raw) as FxResponse;
     },
     [authenticated, getAccessToken]
   );
 
-  // fetch USD -> display rate
+  // fetch USD -> display rate (driven by provider balance or currency)
   useEffect(() => {
     if (!hasMarginfiAccount) return;
     let cancelled = false;
@@ -228,13 +202,10 @@ const SavingsAccount: React.FC = () => {
       }
       setFxLoading(true);
       try {
+        // amount is irrelevant for rate; using savingsUsdc keeps behavior identical
         const fx = await convertFx(savingsUsdc, displayCurrency);
-        if (!cancelled) {
-          console.log("[UI] FX parsed:", fx);
-          setFxRate(fx.rate);
-        }
+        if (!cancelled) setFxRate(fx.rate);
       } catch (e) {
-        console.error("[UI] FX error:", e);
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setFxLoading(false);
@@ -248,10 +219,14 @@ const SavingsAccount: React.FC = () => {
   // balance in user's local currency
   const fiatValue = useMemo(() => savingsUsdc * fxRate, [savingsUsdc, fxRate]);
 
+  // ✅ Refresh via provider slice (plus APY), no direct fetch
   const manualRefresh = useCallback(async () => {
     setErr(null);
-    await Promise.all([refreshBalance(), refreshApy()]);
-  }, [refreshBalance, refreshApy]);
+    await Promise.all([
+      savingsSlice?.refresh?.(), // provider refresh
+      refreshApy(),
+    ]);
+  }, [savingsSlice, refreshApy]);
 
   // Convert a local amount to USD for on-chain (USDC)
   const toUsd = useCallback(
@@ -299,7 +274,12 @@ const SavingsAccount: React.FC = () => {
 
         toast.success("Savings account opened and funded ✅");
         setOpenModal(false);
-        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+        // ✅ refresh provider slice instead of local fetch
+        await Promise.all([
+          refreshUser(),
+          savingsSlice.refresh(),
+          refreshApy(),
+        ]);
       } catch (e: unknown) {
         const message =
           e instanceof Error ? e.message : "Failed to open & fund account";
@@ -314,7 +294,7 @@ const SavingsAccount: React.FC = () => {
       signWithPrivy,
       user?.privyId,
       refreshUser,
-      refreshBalance,
+      savingsSlice,
       refreshApy,
       toUsd,
     ]
@@ -333,12 +313,6 @@ const SavingsAccount: React.FC = () => {
         const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
 
         if (kind === "deposit") {
-          console.log("[UI] depositAction start", {
-            owner58: walletAddress,
-            amountUsdUi,
-            marginfiAccount: cachedAccountPk,
-          });
-
           await depositAction({
             owner58: walletAddress,
             amountUi: amountUsdUi,
@@ -348,15 +322,8 @@ const SavingsAccount: React.FC = () => {
             privyId: user?.privyId,
             signer: signWithPrivy,
           });
-
           toast.success("Deposit submitted ✅");
         } else {
-          console.log("[UI] withdrawAction start", {
-            owner58: walletAddress,
-            amountUsdUi,
-            marginfiAccount: cachedAccountPk,
-          });
-
           await withdrawAction({
             owner58: walletAddress,
             amountUi: amountUsdUi,
@@ -366,14 +333,17 @@ const SavingsAccount: React.FC = () => {
             privyId: user?.privyId,
             signer: signWithPrivy,
           });
-
           toast.success("Withdrawal submitted ✅");
         }
 
         setModal(null);
-        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+        // ✅ refresh provider slice instead of local fetch
+        await Promise.all([
+          refreshUser(),
+          savingsSlice.refresh(),
+          refreshApy(),
+        ]);
       } catch (e) {
-        console.error("[UI] submit error:", e);
         toast.error(
           e instanceof Error ? e.message : `Failed to ${kind} savings`
         );
@@ -386,7 +356,7 @@ const SavingsAccount: React.FC = () => {
       user?.privyId,
       cachedAccountPk,
       refreshUser,
-      refreshBalance,
+      savingsSlice,
       refreshApy,
       depositAction,
       withdrawAction,
@@ -403,18 +373,13 @@ const SavingsAccount: React.FC = () => {
     if (hasMarginfiAccount) setModal({ kind: "withdraw" });
   }, [hasMarginfiAccount]);
 
-  // If no account yet, show "open an account" card
+  // If no account yet, show "open an account" card (unchanged look)
   if (!hasMarginfiAccount) {
     return (
       <div className="space-y-6 vision-perspective">
-        {err && (
+        {(err || hookErr) && (
           <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-            {err}
-          </div>
-        )}
-        {hookErr && (
-          <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-            {hookErr}
+            {err || hookErr}
           </div>
         )}
         <div className="relative group">
@@ -482,9 +447,9 @@ const SavingsAccount: React.FC = () => {
   }
 
   // Show any actions hook errors too
-  const compositeErr = actionsErr || hookErr;
+  const compositeErr = actionsErr || hookErr || savingsSlice.error || null;
 
-  // Account exists → show balance + actions
+  // Account exists → show balance + actions (unchanged UI)
   return (
     <div className="space-y-6 vision-perspective">
       {(err || compositeErr) && (
@@ -531,7 +496,7 @@ const SavingsAccount: React.FC = () => {
             </button>
           </div>
 
-          <div className="flex px-2  sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
+          <div className="flex px-2 sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
               <div className="flex flex-col gap-3">
                 <div className="flex items-baseline justify-between gap-3">
@@ -604,7 +569,7 @@ const SavingsAccount: React.FC = () => {
 
 export default SavingsAccount;
 
-/* ----------------------------- Sub-UI ----------------------------- */
+/* ----------------------------- Sub-UI (unchanged) ----------------------------- */
 function ActionButton({
   label,
   icon,
