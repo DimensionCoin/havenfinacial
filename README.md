@@ -16,7 +16,10 @@ A Next.js 15 application that powers Haven's consumer dashboard: onboarding, wal
    ```
 
 2. **Create your environment file**
-   Copy the template below into `.env` (or create `.env.local` to keep secrets outside version control) and replace each placeholder with real credentials.
+   - Sign up for the required services if you have not already:
+     - [Privy dashboard](https://dashboard.privy.io/) — create an app to obtain the client ID, server secret, wallet auth keys, and fee payer wallet ID.
+     - [Resend](https://resend.com/) — configure a verified sending domain to get an API key and sender email.
+   - Copy the template below into `.env` (or create `.env.local` to keep secrets outside version control) and replace each placeholder with real credentials.
 
    ```dotenv
    # Database
@@ -46,13 +49,13 @@ A Next.js 15 application that powers Haven's consumer dashboard: onboarding, wal
    NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS=<public-key>
    HAVEN_FEEPAYER_WALLET_ID=<privy-wallet-id>
 
-   # Savings / Marginfi configuration
-   MARGINFI_PROGRAM_ID=<marginfi-program-id>
-   MARGINFI_GROUP=<marginfi-group>
-   MARGINFI_USDC_BANK=<marginfi-usdc-bank>
-   MARGINFI_USDC_BANK_LIQ_VAULT=<marginfi-liquidity-vault>
-   NEXT_PUBLIC_MARGINFI_GROUP=<marginfi-group>
-   NEXT_PUBLIC_MARGINFI_USDC_BANK=<marginfi-usdc-bank>
+   # Savings / Marginfi configuration (mainnet values shown)
+   MARGINFI_PROGRAM_ID=MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA
+   MARGINFI_GROUP=4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8
+   MARGINFI_USDC_BANK=2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB
+   MARGINFI_USDC_BANK_LIQ_VAULT=7jaiZR5Sk8hdYN9MxTpczTcwbWpb5WEoxSANuUwveuat
+   NEXT_PUBLIC_MARGINFI_GROUP=4qp6Fx6tnZkY5Wropq9wUYgtFxXKwE6viZxFHg3rdAG8
+   NEXT_PUBLIC_MARGINFI_USDC_BANK=2s37akK2eyBbp8DZgCm7RtsaEz8eJP3Nxd4urLHQv7yB
 
    # Emails
    RESEND_API_KEY=<resend-api-key>
