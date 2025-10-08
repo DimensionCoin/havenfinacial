@@ -26,6 +26,10 @@ import { Buffer } from "buffer";
 import { createHash } from "crypto";
 import marginfiIdl from "@/lib/marginfi_idl.json";
 
+/* ✅ NEW: DB */
+import { connect as connectMongo } from "@/lib/db";
+import User from "@/models/User";
+
 /* ───────── env ───────── */
 function required(name: string) {
   const v = process.env[name];
@@ -195,9 +199,7 @@ function extractBalanceInfo(entry: UnknownRecord) {
     }
   }
 
-  const bankPk = toB58(
-    entry["bank_pk"] ?? entry["bankPk"] ?? entry["bank"]
-  );
+  const bankPk = toB58(entry["bank_pk"] ?? entry["bankPk"] ?? entry["bank"]);
   return { active, bankPk, assetShares };
 }
 
@@ -236,9 +238,7 @@ async function collectRemainingAccountMetas(
         ? bankConfig["oracle_keys"] ?? bankConfig["oracleKeys"]
         : null) ??
       [];
-    const oracleKeys = (Array.isArray(oracleKeysSource)
-      ? oracleKeysSource
-      : [])
+    const oracleKeys = (Array.isArray(oracleKeysSource) ? oracleKeysSource : [])
       .map(toB58)
       .filter((key): key is string => typeof key === "string");
     const defaultKey = PublicKey.default.toBase58();
@@ -383,9 +383,7 @@ export async function POST(req: NextRequest) {
     );
     console.log("[prepare-withdraw] raw oracle_setup u8", rawOracleSetup);
 
-    const vaultB58 = toB58(
-      bank["liquidity_vault"] ?? bank["liquidityVault"]
-    );
+    const vaultB58 = toB58(bank["liquidity_vault"] ?? bank["liquidityVault"]);
     if (!vaultB58) return jsonError("Bank missing liquidity_vault", 500);
     const bankLiquidityVault = new PublicKey(vaultB58);
 
@@ -420,9 +418,7 @@ export async function POST(req: NextRequest) {
         ? bankConfig["oracle_keys"] ?? bankConfig["oracleKeys"]
         : null) ??
       [];
-    const oracleKeys = (Array.isArray(oracleKeysSource)
-      ? oracleKeysSource
-      : [])
+    const oracleKeys = (Array.isArray(oracleKeysSource) ? oracleKeysSource : [])
       .map(toB58)
       .filter((key): key is string => typeof key === "string")
       .filter((key) => key !== PublicKey.default.toBase58());
@@ -570,6 +566,73 @@ export async function POST(req: NextRequest) {
       feeState: feeStatePk.toBase58(),
       remainingCount: orderedRemaining.length,
     });
+
+    /* ✅ NEW: decrement baseline (clamp at 0). If withdrawAll → set to 0. Also persist marginfi.accountPk if missing. */
+    try {
+      await connectMongo(); // safe if already connected
+
+      const pipelineSet = withdrawAll
+        ? {
+            // Withdrawing everything: principal should be 0
+            savingsBaselineUi: 0,
+            "marginfi.accountPk": {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ["$marginfi", null] },
+                    { $eq: ["$marginfi.accountPk", null] },
+                  ],
+                },
+                marginfiAccountPk.toBase58(),
+                "$marginfi.accountPk",
+              ],
+            },
+          }
+        : {
+            // Decrement by amount but never below 0
+            savingsBaselineUi: {
+              $max: [
+                0,
+                {
+                  $subtract: [
+                    { $ifNull: ["$savingsBaselineUi", 0] },
+                    Number.isFinite(amountUi) ? Number(amountUi) : 0,
+                  ],
+                },
+              ],
+            },
+            "marginfi.accountPk": {
+              $cond: [
+                {
+                  $or: [
+                    { $eq: ["$marginfi", null] },
+                    { $eq: ["$marginfi.accountPk", null] },
+                  ],
+                },
+                marginfiAccountPk.toBase58(),
+                "$marginfi.accountPk",
+              ],
+            },
+          };
+
+      const res = await User.updateOne(
+        { "depositWallet.address": owner58 },
+        [{ $set: pipelineSet }],
+        { writeConcern: { w: "majority" } }
+      );
+
+      if (res.matchedCount !== 1) {
+        console.warn(
+          "[/api/savings/prepare-withdraw] User not found to decrement baseline",
+          { owner58 }
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[/api/savings/prepare-withdraw] Failed to decrement savingsBaselineUi",
+        e
+      );
+    }
 
     return NextResponse.json({
       transaction: b64,

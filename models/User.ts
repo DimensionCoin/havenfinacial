@@ -130,6 +130,20 @@ const TokenAccountsSchema = new Schema<TokenAccounts>(
   { _id: false }
 );
 
+/** ---------- NEW: Savings baseline (single number) ---------- */
+
+type SavingsBaseline = {
+  /** Baseline principal in USDC (UI units, e.g. 3.68). */
+  baselineValueUi: number;
+};
+
+const SavingsBaselineSchema = new Schema<SavingsBaseline>(
+  {
+    baselineValueUi: { type: Number, required: true, min: 0, default: 0 },
+  },
+  { _id: false }
+);
+
 /** ---------- Main schema ---------- */
 
 const UserSchema = new Schema(
@@ -215,6 +229,12 @@ const UserSchema = new Schema(
     displayName: { type: String, trim: true },
 
     consents: { type: [ConsentSchema], default: [] },
+
+    /** ✅ NEW: minimal savings baseline (single number) */
+    savings: {
+      type: SavingsBaselineSchema,
+      default: { baselineValueUi: 0 },
+    },
   },
   {
     timestamps: true,
@@ -293,6 +313,8 @@ UserSchema.statics.findOrCreateByPrivy = async function ({
       consents: [],
       tokenAccounts: {},
       marginfi: {},
+      // ensure savings exists for new users
+      savings: { baselineValueUi: 0 },
     });
     return user;
   }

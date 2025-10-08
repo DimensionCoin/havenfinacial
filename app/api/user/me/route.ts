@@ -54,7 +54,9 @@ export async function GET(req: NextRequest) {
     if (bearer) {
       const claims = await privy.verifyAuthToken(bearer);
       const privyUserId = claims.userId;
-      userDoc = await User.findOne({ privyId: privyUserId }).lean<UserDocLean>();
+      userDoc = await User.findOne({
+        privyId: privyUserId,
+      }).lean<UserDocLean>();
     } else {
       const cookieTok = req.cookies.get(SESSION_COOKIE)?.value;
       const uid = await verifySessionCookie(cookieTok);
@@ -78,6 +80,13 @@ export async function GET(req: NextRequest) {
         : typeof v === "number" || typeof v === "string"
         ? new Date(v).toISOString()
         : null;
+
+    // ✅ Pull baseline from Mongo (default 0 if missing/non-number)
+    type WithSavingsBaseline = { savingsBaselineUi?: unknown };
+    const rawBaseline = (userDoc as UserDocLean & WithSavingsBaseline)
+      .savingsBaselineUi;
+    const savingsBaselineUi =
+      typeof rawBaseline === "number" ? rawBaseline : 0;
 
     const payload = {
       id: String(userDoc._id),
@@ -136,6 +145,9 @@ export async function GET(req: NextRequest) {
           : null,
         version: userDoc.savingsConsent?.version ?? "",
       },
+
+      // ✅ Expose baseline in the public payload
+      savingsBaselineUi,
 
       flags: {
         hasDepositWallet,

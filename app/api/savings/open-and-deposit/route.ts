@@ -25,6 +25,10 @@ import BN from "bn.js";
 import { Buffer } from "buffer";
 import marginfiIdl from "@/lib/marginfi_idl.json";
 
+/* ✅ DB */
+import { connect as connectMongo } from "@/lib/db";
+import User from "@/models/User";
+
 /* ───────── env ───────── */
 function required(name: string) {
   const v = process.env[name];
@@ -101,7 +105,6 @@ export async function POST(req: NextRequest) {
     const coder = new BorshInstructionCoder(marginfiIdl as Idl);
 
     // User USDC ATA (payer = Haven)
-    // (We still detect token program for ATA creation, but deposit ix will reference TOKEN_PROGRAM_ID explicitly)
     const detectedTokenProgram = await detectTokenProgramId(conn, USDC_MINT);
     const userUsdcAta = getAssociatedTokenAddressSync(
       USDC_MINT,
@@ -111,7 +114,6 @@ export async function POST(req: NextRequest) {
     );
 
     const ixs = [
-      // match your working Solscan tuning
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 86_157 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 100_003 }),
     ];
@@ -119,7 +121,7 @@ export async function POST(req: NextRequest) {
     if (ensureAta) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          HAVEN_PUBKEY, // payer (Haven; co-signs later via Privy in /api/savings/send)
+          HAVEN_PUBKEY,
           userUsdcAta,
           owner,
           USDC_MINT,
@@ -139,8 +141,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ---- 1) Initialize marginfi account
-    const initIxData = coder.encode("marginfi_account_initialize", {}); // no args; use named object
-
+    const initIxData = coder.encode("marginfi_account_initialize", {});
     ixs.push({
       programId: MARGINFI_PROGRAM_ID,
       keys: [
@@ -149,19 +150,19 @@ export async function POST(req: NextRequest) {
           pubkey: marginfiAccountPk,
           isSigner: !reuseMarginAcc,
           isWritable: true,
-        }, // signer if we created it
-        { pubkey: owner, isSigner: true, isWritable: false }, // user must sign
-        { pubkey: HAVEN_PUBKEY, isSigner: true, isWritable: true }, // fee payer (sponsored)
+        },
+        { pubkey: owner, isSigner: true, isWritable: false },
+        { pubkey: HAVEN_PUBKEY, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
       ],
       data: initIxData,
     });
 
-    // ---- 2) Deposit USDC — IMPORTANT: encode with **named args**
+    // ---- 2) Deposit USDC
     const amountBN = uiToBN(amountUi!, decimals);
     const depositIxData = coder.encode("lending_account_deposit", {
       amount: amountBN,
-      deposit_up_to_limit: null, // Option<bool>::None
+      deposit_up_to_limit: null,
     });
 
     ixs.push({
@@ -177,12 +178,11 @@ export async function POST(req: NextRequest) {
           isSigner: false,
           isWritable: true,
         },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // force classic token program (matches your Solscan)
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data: depositIxData,
     });
 
-    // Build with Haven as fee payer (sponsored)
     const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
       "processed"
     );
@@ -193,11 +193,56 @@ export async function POST(req: NextRequest) {
     }).compileToV0Message();
 
     const tx = new VersionedTransaction(msg);
-
-    // Pre-sign with marginfi account (only if we created it)
     if (marginfiSigner) tx.sign([marginfiSigner]);
-
     const b64 = Buffer.from(tx.serialize()).toString("base64");
+
+    /* ✅ NEW: bump/create savingsBaselineUi by amountUi, and persist marginfi.accountPk if missing */
+    let baselineBumped = false;
+    try {
+      await connectMongo(); // no-op if already connected
+
+      const res = await User.updateOne(
+        { "depositWallet.address": owner58 },
+        [
+          {
+            $set: {
+              savingsBaselineUi: {
+                $add: [
+                  { $ifNull: ["$savingsBaselineUi", 0] },
+                  Number(amountUi),
+                ],
+              },
+              "marginfi.accountPk": {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$marginfi", null] },
+                      { $eq: ["$marginfi.accountPk", null] },
+                    ],
+                  },
+                  marginfiAccountPk.toBase58(),
+                  "$marginfi.accountPk",
+                ],
+              },
+            },
+          },
+        ],
+        { writeConcern: { w: "majority" } }
+      );
+
+      baselineBumped = res.matchedCount === 1;
+      if (!baselineBumped) {
+        console.warn(
+          "[/api/savings/open-and-deposit] User not found for baseline bump",
+          { owner58 }
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[/api/savings/open-and-deposit] Failed to bump savingsBaselineUi",
+        e
+      );
+    }
 
     return NextResponse.json({
       transaction: b64,
@@ -206,6 +251,8 @@ export async function POST(req: NextRequest) {
       feePayer: HAVEN_PUBKEY.toBase58(),
       lastValidBlockHeight,
       requiredClientSigner: owner.toBase58(),
+      baselineBumped, // for debugging
+      bumpedByUi: Number(amountUi),
     });
   } catch (e: unknown) {
     const message =
@@ -214,6 +261,111 @@ export async function POST(req: NextRequest) {
         : typeof e === "string"
         ? e
         : "prepare failed";
+    return jsonError(message, 500, e);
+  }
+}
+
+/* (Optional) PATCH can stay if you still want a manual setter, but not required now */
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = (await req.json().catch(() => null)) as {
+      owner58?: string;
+      amountUi?: number; // add to baseline
+      setBaselineUi?: number; // hard-set baseline
+      marginfiAccount?: string;
+      txSig?: string;
+    } | null;
+
+    const owner58 = body?.owner58?.trim();
+    if (!owner58) {
+      return NextResponse.json(
+        { error: "owner58 is required" },
+        { status: 400 }
+      );
+    }
+
+    await connectMongo();
+
+    // hard-set
+    if (Number.isFinite(body?.setBaselineUi)) {
+      const v = Number(body!.setBaselineUi);
+      if (v < 0) {
+        return NextResponse.json(
+          { error: "setBaselineUi must be >= 0" },
+          { status: 400 }
+        );
+      }
+      const setDoc: Record<string, unknown> = { savingsBaselineUi: v };
+      if (body?.marginfiAccount) {
+        setDoc["marginfi.accountPk"] = {
+          $cond: [
+            {
+              $or: [
+                { $eq: ["$marginfi", null] },
+                { $eq: ["$marginfi.accountPk", null] },
+              ],
+            },
+            body.marginfiAccount.trim(),
+            "$marginfi.accountPk",
+          ],
+        };
+      }
+      const res = await User.updateOne(
+        { "depositWallet.address": owner58 },
+        [{ $set: setDoc }],
+        { writeConcern: { w: "majority" } }
+      );
+      if (res.matchedCount !== 1)
+        return NextResponse.json(
+          { error: "User not found for provided owner58" },
+          { status: 404 }
+        );
+      return NextResponse.json({ ok: true, mode: "set", savingsBaselineUi: v });
+    }
+
+    // add
+    if (!Number.isFinite(body?.amountUi) || Number(body!.amountUi) <= 0) {
+      return NextResponse.json(
+        { error: "amountUi must be a positive number" },
+        { status: 400 }
+      );
+    }
+    const amt = Number(body!.amountUi);
+
+    const pipelineSet: Record<string, unknown> = {
+      savingsBaselineUi: {
+        $add: [{ $ifNull: ["$savingsBaselineUi", 0] }, amt],
+      },
+    };
+    if (body?.marginfiAccount) {
+      pipelineSet["marginfi.accountPk"] = {
+        $cond: [
+          {
+            $or: [
+              { $eq: ["$marginfi", null] },
+              { $eq: ["$marginfi.accountPk", null] },
+            ],
+          },
+          body.marginfiAccount.trim(),
+          "$marginfi.accountPk",
+        ],
+      };
+    }
+
+    const res = await User.updateOne(
+      { "depositWallet.address": owner58 },
+      [{ $set: pipelineSet }],
+      { writeConcern: { w: "majority" } }
+    );
+    if (res.matchedCount !== 1)
+      return NextResponse.json(
+        { error: "User not found for provided owner58" },
+        { status: 404 }
+      );
+    return NextResponse.json({ ok: true, mode: "added", addedUi: amt });
+  } catch (e) {
+    const message =
+      e instanceof Error ? e.message : typeof e === "string" ? e : "failed";
     return jsonError(message, 500, e);
   }
 }

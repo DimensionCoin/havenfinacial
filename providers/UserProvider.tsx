@@ -45,6 +45,8 @@ type PublicUser = {
     acceptedAt?: string | null;
     version?: string;
   };
+  /** ✅ New: baseline principal in USD/USDC units */
+  savingsBaselineUi?: number;
   flags?: {
     hasDepositWallet: boolean;
     hasMarginfiAccount: boolean;
@@ -58,12 +60,15 @@ type Ctx = {
   user: PublicUser | null;
   loading: boolean;
   refresh: () => Promise<void>;
+  /** ✅ New: convenience getter so callers don’t null-check */
+  savingsBaselineUi: number;
 };
 
 const UserContext = createContext<Ctx>({
   user: null,
   loading: true,
   refresh: async () => {},
+  savingsBaselineUi: 0,
 });
 
 const PUBLIC_ROUTES = new Set<string>([
@@ -125,7 +130,6 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       const data = (await res.json()) as PublicUser;
       setUser(data);
 
-      // gate private routes until KYC/activation complete
       if (!isPublicPath(pathname)) {
         const ok = data.status === "active" && data.kycStatus === "approved";
         if (!ok && pathname !== "/onboarding" && pathname !== "/kyc/pending") {
@@ -145,21 +149,24 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     await fetchMe();
   }, [fetchMe]);
 
-  // Kick off initial load when Privy is ready (or after mount so SSR doesn't flicker)
   useEffect(() => {
     if (!mounted) return;
     if (!ready) return;
     fetchMe();
   }, [mounted, ready, authenticated, pathname, fetchMe]);
 
-  const value = useMemo(
-    () => ({ user, loading, refresh }),
-    [user, loading, refresh]
+  const savingsBaselineUi = useMemo(
+    () => Number(user?.savingsBaselineUi ?? 0) || 0,
+    [user?.savingsBaselineUi]
   );
 
-  // Block UI on private pages until session + user are ready
+  const value = useMemo(
+    () => ({ user, loading, refresh, savingsBaselineUi }),
+    [user, loading, refresh, savingsBaselineUi]
+  );
+
   const isPublic = isPublicPath(pathname);
-  const shouldBlock = !mounted || !ready || loading || (!isPublic && !user); // on private routes require user to be present
+  const shouldBlock = !mounted || !ready || loading || (!isPublic && !user);
 
   const loaderMessage = !mounted
     ? "Starting…"

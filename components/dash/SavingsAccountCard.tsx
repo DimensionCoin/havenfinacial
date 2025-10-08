@@ -13,7 +13,8 @@ import type { VersionedTransaction } from "@solana/web3.js";
 import { Buffer } from "buffer";
 import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
 import { useSavingsActions } from "@/hooks/useSavingsActions";
-import { useBalances } from "@/providers/BalanceProvider"; // ✅ NEW
+import { useBalances } from "@/providers/BalanceProvider";
+import { useSavingsInterest } from "@/hooks/useSavingsInterest";
 
 // Ensure Buffer exists in the browser
 if (typeof window !== "undefined") {
@@ -57,13 +58,11 @@ function formatFiatNarrow(n: number, currency: string) {
     return n.toFixed(2);
   }
 }
-
 function formatPct(n: number | null | undefined) {
   if (n == null || !Number.isFinite(n)) return "—";
   const digits = Math.abs(n) >= 1 ? 1 : 2;
   return `${n.toFixed(digits)}%`;
 }
-
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const id = setTimeout(() => reject(new Error(`${label} timed out`)), ms);
@@ -85,7 +84,7 @@ const SavingsAccount: React.FC = () => {
   const { user, loading: userLoading, refresh: refreshUser } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
   const { wallets: solWallets } = useSolanaWallets();
-  const balances = useBalances(); // ✅ NEW
+  const balances = useBalances();
 
   // First-time "open & deposit"
   const {
@@ -105,22 +104,30 @@ const SavingsAccount: React.FC = () => {
   const walletAddress = user?.depositWallet?.address ?? null;
   const displayCurrency = useMemo(() => {
     const c = (user?.displayCurrency || "USD").toUpperCase();
-    return c === "USDC" ? "USD" : c; // normalize
+    return c === "USDC" ? "USD" : c;
   }, [user?.displayCurrency]);
 
   const hasMarginfiAccount = !!user?.marginfi?.accountPk;
   const cachedAccountPk = user?.marginfi?.accountPk || null;
 
-  // ✅ Read savings balance from BalanceProvider (USD/USDC-pegged)
+  // Read savings balance from BalanceProvider (USD/USDC-pegged)
   const savingsSlice = balances.savings;
   const savingsUsdc = Number(savingsSlice?.amountUsd ?? 0) || 0;
+
+  // Interest via hook (baseline from Mongo, balance from provider)
+  const {
+    interestUsd,
+    loading: interestLoading,
+    error: interestErr,
+    refresh: refreshInterest,
+  } = useSavingsInterest();
 
   // local flags (FX + page-level)
   const [fxLoading, setFxLoading] = useState<boolean>(false);
   const [fxRate, setFxRate] = useState<number>(1); // USD -> displayCurrency
   const [err, setErr] = useState<string | null>(null);
 
-  // APY state
+  // APY (display-only)
   const [apyLoading, setApyLoading] = useState<boolean>(false);
   const [apyPct, setApyPct] = useState<number | null>(null);
 
@@ -129,15 +136,16 @@ const SavingsAccount: React.FC = () => {
   const [modal, setModal] = useState<Modal>(null);
   const [openModal, setOpenModal] = useState(false);
 
-  // combine loading like before (replace balLoading with provider's loading)
+  // combine loading
   const loading =
     userLoading ||
     savingsSlice.loading ||
     fxLoading ||
     hookLoading ||
-    actionsLoading;
+    actionsLoading ||
+    interestLoading;
 
-  /* --------------------- APY (unchanged) ---------------------- */
+  /* --------------------- APY (display only) ---------------------- */
   const refreshApy = useCallback(async (): Promise<void> => {
     if (!hasMarginfiAccount) {
       setApyPct(null);
@@ -157,12 +165,11 @@ const SavingsAccount: React.FC = () => {
       setApyLoading(false);
     }
   }, [hasMarginfiAccount]);
-
   useEffect(() => {
     void refreshApy();
   }, [refreshApy]);
 
-  /* --------------------- FX (unchanged) ---------------------- */
+  /* --------------------- FX ---------------------- */
   const convertFx = useCallback(
     async (amount: number, currency: string): Promise<FxResponse> => {
       const accessToken = authenticated
@@ -190,7 +197,6 @@ const SavingsAccount: React.FC = () => {
     [authenticated, getAccessToken]
   );
 
-  // fetch USD -> display rate (driven by provider balance or currency)
   useEffect(() => {
     if (!hasMarginfiAccount) return;
     let cancelled = false;
@@ -202,7 +208,6 @@ const SavingsAccount: React.FC = () => {
       }
       setFxLoading(true);
       try {
-        // amount is irrelevant for rate; using savingsUsdc keeps behavior identical
         const fx = await convertFx(savingsUsdc, displayCurrency);
         if (!cancelled) setFxRate(fx.rate);
       } catch (e) {
@@ -216,17 +221,22 @@ const SavingsAccount: React.FC = () => {
     };
   }, [hasMarginfiAccount, savingsUsdc, displayCurrency, convertFx]);
 
-  // balance in user's local currency
+  // balances in user's local currency
   const fiatValue = useMemo(() => savingsUsdc * fxRate, [savingsUsdc, fxRate]);
-
-  // ✅ Refresh via provider slice (plus APY), no direct fetch
+  const interestFiat = useMemo(
+    () => interestUsd * fxRate,
+    [interestUsd, fxRate]
+  );
+  // Refresh via provider slice + APY + our hook
   const manualRefresh = useCallback(async () => {
     setErr(null);
     await Promise.all([
-      savingsSlice?.refresh?.(), // provider refresh
+      savingsSlice?.refresh?.(),
       refreshApy(),
+      refreshInterest(),
+      refreshUser(),
     ]);
-  }, [savingsSlice, refreshApy]);
+  }, [savingsSlice, refreshApy, refreshInterest, refreshUser]);
 
   // Convert a local amount to USD for on-chain (USDC)
   const toUsd = useCallback(
@@ -263,7 +273,7 @@ const SavingsAccount: React.FC = () => {
       if (!ready || !authenticated) return void toast.error("Please sign in");
 
       try {
-        const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
+        const amountUsdUi = toUsd(amountLocalUi);
 
         await openAndDepositHook({
           owner58: walletAddress,
@@ -274,11 +284,11 @@ const SavingsAccount: React.FC = () => {
 
         toast.success("Savings account opened and funded ✅");
         setOpenModal(false);
-        // ✅ refresh provider slice instead of local fetch
         await Promise.all([
           refreshUser(),
           savingsSlice.refresh(),
           refreshApy(),
+          refreshInterest(), // will set baseline and interest properly
         ]);
       } catch (e: unknown) {
         const message =
@@ -296,6 +306,7 @@ const SavingsAccount: React.FC = () => {
       refreshUser,
       savingsSlice,
       refreshApy,
+      refreshInterest,
       toUsd,
     ]
   );
@@ -310,7 +321,7 @@ const SavingsAccount: React.FC = () => {
       if (!ready || !authenticated) return void toast.error("Please sign in");
 
       try {
-        const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
+        const amountUsdUi = toUsd(amountLocalUi);
 
         if (kind === "deposit") {
           await depositAction({
@@ -337,11 +348,11 @@ const SavingsAccount: React.FC = () => {
         }
 
         setModal(null);
-        // ✅ refresh provider slice instead of local fetch
         await Promise.all([
           refreshUser(),
           savingsSlice.refresh(),
           refreshApy(),
+          refreshInterest(), // recompute interest from baseline + new balance
         ]);
       } catch (e) {
         toast.error(
@@ -358,6 +369,7 @@ const SavingsAccount: React.FC = () => {
       refreshUser,
       savingsSlice,
       refreshApy,
+      refreshInterest,
       depositAction,
       withdrawAction,
       signWithPrivy,
@@ -368,12 +380,11 @@ const SavingsAccount: React.FC = () => {
   const openDepositModal = useCallback(() => {
     if (hasMarginfiAccount) setModal({ kind: "deposit" });
   }, [hasMarginfiAccount]);
-
   const openWithdrawModal = useCallback(() => {
     if (hasMarginfiAccount) setModal({ kind: "withdraw" });
   }, [hasMarginfiAccount]);
 
-  // If no account yet, show "open an account" card (unchanged look)
+  // If no account yet, show "open an account" card
   if (!hasMarginfiAccount) {
     return (
       <div className="space-y-6 vision-perspective">
@@ -384,9 +395,8 @@ const SavingsAccount: React.FC = () => {
         )}
         <div className="relative group">
           <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
             <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
-
             <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
               <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
                 <div className="relative flex-shrink-0">
@@ -425,7 +435,7 @@ const SavingsAccount: React.FC = () => {
                   setOpenModal(true);
                 }}
                 disabled={!ready || !authenticated || !walletAddress || loading}
-                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] disabled:opacity-50 flex-shrink-0"
+                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold"
               >
                 <span>{loading ? "Preparing…" : "Open an account"}</span>
               </button>
@@ -447,9 +457,10 @@ const SavingsAccount: React.FC = () => {
   }
 
   // Show any actions hook errors too
-  const compositeErr = actionsErr || hookErr || savingsSlice.error || null;
+  const compositeErr =
+    actionsErr || hookErr || savingsSlice.error || interestErr || null;
 
-  // Account exists → show balance + actions (unchanged UI)
+  // Account exists → show balance + actions
   return (
     <div className="space-y-6 vision-perspective">
       {(err || compositeErr) && (
@@ -460,7 +471,7 @@ const SavingsAccount: React.FC = () => {
 
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
           <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
@@ -496,32 +507,66 @@ const SavingsAccount: React.FC = () => {
             </button>
           </div>
 
+          {/* Amount row with interest directly under amount */}
           <div className="flex px-2 sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-baseline justify-between gap-3">
-                  <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-1 min-w-0">
-                    {loading ? (
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
-                        <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
-                          {formatFiatNarrow(fiatValue, displayCurrency)}
-                        </span>
-                        <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end sm:pb-1 lg:pb-2">
-                          {displayCurrency.toLowerCase()}
-                        </span>
-                      </>
-                    )}
-                  </div>
+              <div className="flex flex-col">
+                {/* Top row: balance + currency */}
+                <div className="flex items-baseline gap-2 sm:gap-3">
+                  {loading ? (
+                    <>
+                      <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
+                      <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
+                        {formatFiatNarrow(fiatValue, displayCurrency)}
+                      </span>
+                      <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium pb-0.5 sm:pb-1 lg:pb-2">
+                        {displayCurrency.toLowerCase()}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {/* Tiny gap, interest sits just under balance */}
+                <div className="mt-0.5 sm:mt-1">
+                  {loading ? (
+                    <span className="inline-block h-3 w-20 bg-white/10 rounded animate-pulse" />
+                  ) : (
+                    <span
+                      className={[
+                        "text-[11px] sm:text-xs tracking-tight whitespace-nowrap",
+                        interestLoading
+                          ? "text-white/50"
+                          : (interestFiat ?? 0) > 0
+                          ? "text-[rgb(182,255,62)]/90"
+                          : "text-white/50",
+                      ].join(" ")}
+                      title="Interest earned since baseline"
+                    >
+                      interest earned{" "}
+                      {interestLoading
+                        ? "…"
+                        : (() => {
+                            const v = Number.isFinite(interestFiat)
+                              ? Math.max(0, interestFiat)
+                              : 0;
+                            const formatted = formatFiatNarrow(
+                              v,
+                              displayCurrency
+                            );
+                            return v > 0 ? `+${formatted}` : formatted;
+                          })()}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="">
+            {/* Right-side stats: keep APY only */}
+            <div className="flex flex-col gap-2 sm:gap-3">
               <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm">
                 <div className="text-right">
                   <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
@@ -560,7 +605,7 @@ const SavingsAccount: React.FC = () => {
           onClose={() => setModal(null)}
           onSubmit={onSubmitSavings}
           displayCurrency={displayCurrency}
-          fxRate={fxRate} // USD -> display
+          fxRate={fxRate}
         />
       )}
     </div>

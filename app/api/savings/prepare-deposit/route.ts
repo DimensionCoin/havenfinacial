@@ -23,6 +23,8 @@ import BN from "bn.js";
 import { Buffer } from "buffer";
 
 import marginfiIdl from "@/lib/marginfi_idl.json";
+
+/* ───────── DB (for baseline bump) ───────── */
 import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 
@@ -71,7 +73,7 @@ function json(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, { status });
 }
 
-/* ───────── route ───────── */
+/* ───────── route: POST (build tx + bump baseline by amountUi) ───────── */
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => null)) as {
@@ -130,7 +132,6 @@ export async function POST(req: NextRequest) {
 
     // Build ixs
     const ixs = [
-      // Same tuning you used successfully
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 86_157 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 100_003 }),
     ];
@@ -173,7 +174,7 @@ export async function POST(req: NextRequest) {
       data: depositIxData,
     });
 
-    // Compile and return
+    // Compile tx
     const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
       "processed"
     );
@@ -186,6 +187,55 @@ export async function POST(req: NextRequest) {
     const tx = new VersionedTransaction(msg);
     const b64 = Buffer.from(tx.serialize()).toString("base64");
 
+    /* ───────── NEW: bump savingsBaselineUi by amountUi ─────────
+       We do this best-effort and DO NOT block tx creation if it fails.
+       If marginfi.accountPk is missing, we set it.
+    */
+    let dbUpdated = false;
+    try {
+      await connectMongo(); // safe if already connected
+      const marginfiAccountB58 = marginfiAccountPk.toBase58();
+
+      const res = await User.updateOne(
+        { "depositWallet.address": owner58 },
+        [
+          {
+            $set: {
+              savingsBaselineUi: {
+                $add: [{ $ifNull: ["$savingsBaselineUi", 0] }, amountUi],
+              },
+              "marginfi.accountPk": {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$marginfi", null] },
+                      { $eq: ["$marginfi.accountPk", null] },
+                    ],
+                  },
+                  marginfiAccountB58,
+                  "$marginfi.accountPk",
+                ],
+              },
+            },
+          },
+        ],
+        { writeConcern: { w: "majority" } }
+      );
+      dbUpdated = res.matchedCount === 1;
+      if (!dbUpdated) {
+        console.warn(
+          "[/api/savings/prepare-deposit] User not found for baseline bump",
+          { owner58 }
+        );
+      }
+    } catch (e) {
+      console.error(
+        "[/api/savings/prepare-deposit] Failed to bump savingsBaselineUi",
+        e
+      );
+    }
+
+    // Return tx (unchanged), plus a small hint about DB update result
     return NextResponse.json({
       transaction: b64,
       marginfiAccount: marginfiAccountPk.toBase58(),
@@ -193,7 +243,112 @@ export async function POST(req: NextRequest) {
       feePayer: HAVEN_PUBKEY.toBase58(),
       lastValidBlockHeight,
       requiredClientSigner: owner.toBase58(),
+      baselineBumped: dbUpdated, // ← for debugging/telemetry only
+      bumpedByUi: amountUi, // ← echoes what we tried to add
     });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return json(500, { error: message });
+  }
+}
+
+/* ───────── PATCH remains (manual set/add if you still want it) ───────── */
+export async function PATCH(req: NextRequest) {
+  try {
+    const body = (await req.json().catch(() => null)) as {
+      owner58?: string; // required
+      setBaselineUi?: number; // optional: hard-set baseline
+      amountUi?: number; // optional: add to baseline (deposit amount)
+      marginfiAccount?: string; // optional: persist if missing
+      txSig?: string; // optional: for logs
+    } | null;
+
+    const owner58 = body?.owner58?.trim();
+    if (!owner58) {
+      return json(400, { error: "owner58 is required" });
+    }
+
+    const setBaselineUi = body?.setBaselineUi;
+    const amountUi = body?.amountUi;
+    const marginfiAccount = body?.marginfiAccount?.trim();
+
+    const hasSet = Number.isFinite(setBaselineUi);
+    const hasAdd = Number.isFinite(amountUi);
+    if (hasSet === hasAdd) {
+      return json(400, {
+        error: "Provide exactly one of setBaselineUi OR amountUi.",
+      });
+    }
+
+    await connectMongo();
+
+    if (hasSet) {
+      const value = Number(setBaselineUi);
+      if (value < 0) return json(400, { error: "setBaselineUi must be >= 0" });
+
+      const setDoc: Record<string, unknown> = { savingsBaselineUi: value };
+      if (marginfiAccount) {
+        setDoc["marginfi.accountPk"] = {
+          $cond: [
+            {
+              $or: [
+                { $eq: ["$marginfi", null] },
+                { $eq: ["$marginfi.accountPk", null] },
+              ],
+            },
+            marginfiAccount,
+            "$marginfi.accountPk",
+          ],
+        };
+      }
+
+      const res = await User.updateOne(
+        { "depositWallet.address": owner58 },
+        [{ $set: setDoc }],
+        { writeConcern: { w: "majority" } }
+      );
+
+      if (res.matchedCount !== 1) {
+        return json(404, { error: "User not found for provided owner58" });
+      }
+      return json(200, { ok: true, mode: "set", savingsBaselineUi: value });
+    }
+
+    // add to baseline (deposit)
+    const amt = Number(amountUi);
+    if (amt <= 0) return json(400, { error: "amountUi must be > 0" });
+
+    const pipelineSet: Record<string, unknown> = {
+      savingsBaselineUi: {
+        $add: [{ $ifNull: ["$savingsBaselineUi", 0] }, amt],
+      },
+    };
+    if (marginfiAccount) {
+      pipelineSet["marginfi.accountPk"] = {
+        $cond: [
+          {
+            $or: [
+              { $eq: ["$marginfi", null] },
+              { $eq: ["$marginfi.accountPk", null] },
+            ],
+          },
+          marginfiAccount,
+          "$marginfi.accountPk",
+        ],
+      };
+    }
+
+    const res = await User.updateOne(
+      { "depositWallet.address": owner58 },
+      [{ $set: pipelineSet }],
+      { writeConcern: { w: "majority" } }
+    );
+
+    if (res.matchedCount !== 1) {
+      return json(404, { error: "User not found for provided owner58" });
+    }
+
+    return json(200, { ok: true, mode: "added", addedUi: amt });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
     return json(500, { error: message });
