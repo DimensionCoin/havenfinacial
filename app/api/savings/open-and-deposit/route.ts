@@ -1,4 +1,3 @@
-// app/api/savings/open-and-deposit/route.ts
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
@@ -18,6 +17,8 @@ import {
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
+  getAccount,
+  getMint,
 } from "@solana/spl-token";
 import { BorshInstructionCoder } from "@coral-xyz/anchor";
 import type { Idl } from "@coral-xyz/anchor";
@@ -25,7 +26,7 @@ import BN from "bn.js";
 import { Buffer } from "buffer";
 import marginfiIdl from "@/lib/marginfi_idl.json";
 
-/* ✅ DB */
+/* DB */
 import { connect as connectMongo } from "@/lib/db";
 import User from "@/models/User";
 
@@ -60,52 +61,64 @@ function uiToBN(amountUi: number | string, decimals: number): BN {
   return new BN(w).mul(base).add(new BN(f));
 }
 
-async function detectTokenProgramId(conn: Connection, mint: PublicKey) {
-  const info = await conn.getAccountInfo(mint, "confirmed");
-  if (!info) throw new Error("USDC mint not found on chain");
-  return info.owner.equals(TOKEN_2022_PROGRAM_ID)
-    ? TOKEN_2022_PROGRAM_ID
-    : TOKEN_PROGRAM_ID;
+function json(status: number, body: Record<string, unknown>) {
+  if (status >= 400) console.error("[/api/savings/open-and-deposit]", body);
+  return NextResponse.json(body, { status });
 }
 
-function jsonError(message: string, status = 500, extra?: unknown) {
-  if (extra) console.error("[/api/savings/open-and-deposit]", message, extra);
-  else console.error("[/api/savings/open-and-deposit]", message);
-  return NextResponse.json({ error: message }, { status });
-}
-
-/* ───────── route ───────── */
+/* ───────── POST: build tx (server pre-signs marginfi kp; NO DB writes) ───────── */
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => null)) as {
-      owner58?: string;
-      amountUi?: number;
-      decimals?: number;
-      marginfiAccount?: string; // optional: reuse existing non-PDA account
+      owner58?: string; // user deposit wallet (authority)
+      amountUi?: number; // USDC UI units
+      decimals?: number; // defaults to mint.decimals
       ensureAta?: boolean; // default true
+      marginfiAccount?: string; // optional reuse (if already exists)
     } | null;
 
-    const owner58 = body?.owner58;
-    const amountUi = body?.amountUi;
-    const decimals = Number.isFinite(body?.decimals)
-      ? Number(body!.decimals)
-      : 6;
+    const owner58 = body?.owner58?.trim();
+    const amountUi = Number(body?.amountUi);
     const ensureAta = body?.ensureAta !== false;
-    const reuseMarginAcc = body?.marginfiAccount;
 
-    if (!owner58 || !Number.isFinite(Number(amountUi))) {
-      return NextResponse.json(
-        { error: "owner58 and amountUi are required" },
-        { status: 400 }
-      );
+    if (!owner58 || !Number.isFinite(amountUi) || amountUi <= 0) {
+      return json(400, { error: "owner58 and positive amountUi are required" });
+    }
+
+    // Ensure user exists
+    await connectMongo();
+    const existing = await User.findOne(
+      { "depositWallet.address": owner58 },
+      { _id: 1, "marginfi.accountPk": 1 }
+    ).lean();
+
+    if (!existing?._id) {
+      return json(404, {
+        error: "User not found for provided owner58",
+        owner58,
+      });
     }
 
     const owner = new PublicKey(owner58);
     const conn = new Connection(RPC, "confirmed");
     const coder = new BorshInstructionCoder(marginfiIdl as Idl);
 
-    // User USDC ATA (payer = Haven)
-    const detectedTokenProgram = await detectTokenProgramId(conn, USDC_MINT);
+    // Mint + decimals + program detection
+    const mintForDecimals = await getMint(conn, USDC_MINT);
+    const decimals = Number.isFinite(body?.decimals)
+      ? Number(body!.decimals)
+      : mintForDecimals.decimals;
+
+    const mintAccountInfo = await conn.getAccountInfo(USDC_MINT, "confirmed");
+    if (!mintAccountInfo)
+      return json(400, { error: "USDC mint not found on chain" });
+
+    const detectedTokenProgram = mintAccountInfo.owner.equals(
+      TOKEN_2022_PROGRAM_ID
+    )
+      ? TOKEN_2022_PROGRAM_ID
+      : TOKEN_PROGRAM_ID;
+
     const userUsdcAta = getAssociatedTokenAddressSync(
       USDC_MINT,
       owner,
@@ -113,6 +126,49 @@ export async function POST(req: NextRequest) {
       detectedTokenProgram
     );
 
+    // Gentle balance preflight (if ATA exists)
+    const amountBn = uiToBN(amountUi, decimals);
+    const ataInfo = await conn.getAccountInfo(userUsdcAta, "confirmed");
+    if (ataInfo) {
+      const acc = await getAccount(
+        conn,
+        userUsdcAta,
+        "confirmed",
+        detectedTokenProgram
+      );
+      const userRaw = BigInt(acc.amount.toString());
+      if (userRaw < BigInt(amountBn.toString())) {
+        const availableUi = Number(userRaw) / 10 ** decimals;
+        const shortfallUi = amountUi - availableUi;
+        return json(400, {
+          error: "Insufficient USDC balance",
+          details: {
+            requiredUi: amountUi,
+            availableUi,
+            shortfallUi: Math.max(0, shortfallUi),
+          },
+        });
+      }
+    }
+
+    // marginfi account: reuse if provided/known, otherwise create ephemeral kp on server and pre-sign
+    const reusePk =
+      (body?.marginfiAccount && new PublicKey(body.marginfiAccount)) ||
+      (existing?.marginfi?.accountPk &&
+        new PublicKey(existing.marginfi.accountPk)) ||
+      null;
+
+    let marginfiAccountPk: PublicKey;
+    let marginfiSigner: Keypair | null = null;
+
+    if (reusePk) {
+      marginfiAccountPk = reusePk;
+    } else {
+      marginfiSigner = Keypair.generate();
+      marginfiAccountPk = marginfiSigner.publicKey;
+    }
+
+    // Build instructions
     const ixs = [
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 86_157 }),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 100_003 }),
@@ -121,7 +177,7 @@ export async function POST(req: NextRequest) {
     if (ensureAta) {
       ixs.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          HAVEN_PUBKEY,
+          HAVEN_PUBKEY, // sponsor pays rent
           userUsdcAta,
           owner,
           USDC_MINT,
@@ -130,41 +186,31 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // marginfi account (non-PDA): create or reuse
-    let marginfiAccountPk: PublicKey;
-    let marginfiSigner: Keypair | null = null;
-    if (reuseMarginAcc) {
-      marginfiAccountPk = new PublicKey(reuseMarginAcc);
-    } else {
-      marginfiSigner = Keypair.generate();
-      marginfiAccountPk = marginfiSigner.publicKey;
+    // 1) Initialize marginfi account (requires: marginfiAccount signer + owner signer + HAVEN signer)
+    if (!reusePk) {
+      const initIxData = coder.encode("marginfi_account_initialize", {});
+      ixs.push({
+        programId: MARGINFI_PROGRAM_ID,
+        keys: [
+          { pubkey: MARGINFI_GROUP, isSigner: false, isWritable: false },
+          { pubkey: marginfiAccountPk, isSigner: true, isWritable: true }, // server will pre-sign if we created it
+          { pubkey: owner, isSigner: true, isWritable: false }, // user signs client-side
+          { pubkey: HAVEN_PUBKEY, isSigner: true, isWritable: true }, // HAVEN signs in /api/savings/send
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
+        ],
+        data: initIxData,
+      });
     }
 
-    // ---- 1) Initialize marginfi account
-    const initIxData = coder.encode("marginfi_account_initialize", {});
-    ixs.push({
-      programId: MARGINFI_PROGRAM_ID,
-      keys: [
-        { pubkey: MARGINFI_GROUP, isSigner: false, isWritable: false },
-        {
-          pubkey: marginfiAccountPk,
-          isSigner: !reuseMarginAcc,
-          isWritable: true,
-        },
-        { pubkey: owner, isSigner: true, isWritable: false },
-        { pubkey: HAVEN_PUBKEY, isSigner: true, isWritable: true },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      ],
-      data: initIxData,
-    });
-
-    // ---- 2) Deposit USDC
-    const amountBN = uiToBN(amountUi!, decimals);
+    // 2) Deposit USDC (owner must sign)
     const depositIxData = coder.encode("lending_account_deposit", {
-      amount: amountBN,
+      amount: amountBn,
       deposit_up_to_limit: null,
     });
-
     ixs.push({
       programId: MARGINFI_PROGRAM_ID,
       keys: [
@@ -178,11 +224,12 @@ export async function POST(req: NextRequest) {
           isSigner: false,
           isWritable: true,
         },
-        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // classic token program (matches your working tx)
       ],
       data: depositIxData,
     });
 
+    // Build tx (sponsored fees)
     const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
       "processed"
     );
@@ -193,56 +240,13 @@ export async function POST(req: NextRequest) {
     }).compileToV0Message();
 
     const tx = new VersionedTransaction(msg);
+
+    // If we created the marginfi account, pre-sign it server-side now.
     if (marginfiSigner) tx.sign([marginfiSigner]);
+
+    // IMPORTANT: do NOT sign with HAVEN here;
+    // your /api/savings/send should attach the HAVEN signature right before sending.
     const b64 = Buffer.from(tx.serialize()).toString("base64");
-
-    /* ✅ NEW: bump/create savingsBaselineUi by amountUi, and persist marginfi.accountPk if missing */
-    let baselineBumped = false;
-    try {
-      await connectMongo(); // no-op if already connected
-
-      const res = await User.updateOne(
-        { "depositWallet.address": owner58 },
-        [
-          {
-            $set: {
-              savingsBaselineUi: {
-                $add: [
-                  { $ifNull: ["$savingsBaselineUi", 0] },
-                  Number(amountUi),
-                ],
-              },
-              "marginfi.accountPk": {
-                $cond: [
-                  {
-                    $or: [
-                      { $eq: ["$marginfi", null] },
-                      { $eq: ["$marginfi.accountPk", null] },
-                    ],
-                  },
-                  marginfiAccountPk.toBase58(),
-                  "$marginfi.accountPk",
-                ],
-              },
-            },
-          },
-        ],
-        { writeConcern: { w: "majority" } }
-      );
-
-      baselineBumped = res.matchedCount === 1;
-      if (!baselineBumped) {
-        console.warn(
-          "[/api/savings/open-and-deposit] User not found for baseline bump",
-          { owner58 }
-        );
-      }
-    } catch (e) {
-      console.error(
-        "[/api/savings/open-and-deposit] Failed to bump savingsBaselineUi",
-        e
-      );
-    }
 
     return NextResponse.json({
       transaction: b64,
@@ -250,103 +254,66 @@ export async function POST(req: NextRequest) {
       userUsdcAta: userUsdcAta.toBase58(),
       feePayer: HAVEN_PUBKEY.toBase58(),
       lastValidBlockHeight,
-      requiredClientSigner: owner.toBase58(),
-      baselineBumped, // for debugging
-      bumpedByUi: Number(amountUi),
+      requiredClientSigner: owner.toBase58(), // helpful for client logs
+      note: "Client should sign as owner, then POST to /api/savings/send which will attach HAVEN signature and broadcast.",
     });
-  } catch (e: unknown) {
-    const message =
-      e instanceof Error
-        ? e.message
-        : typeof e === "string"
-        ? e
-        : "prepare failed";
-    return jsonError(message, 500, e);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "prepare failed";
+    return json(500, { error: message });
   }
 }
 
-/* (Optional) PATCH can stay if you still want a manual setter, but not required now */
+/* ───────── PATCH: verify txSig, then record baseline & marginfi link ───────── */
 export async function PATCH(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => null)) as {
       owner58?: string;
-      amountUi?: number; // add to baseline
-      setBaselineUi?: number; // hard-set baseline
-      marginfiAccount?: string;
+      amountUi?: number;
       txSig?: string;
+      marginfiAccount?: string; // optional: set if missing
     } | null;
 
     const owner58 = body?.owner58?.trim();
-    if (!owner58) {
-      return NextResponse.json(
-        { error: "owner58 is required" },
-        { status: 400 }
-      );
+    const amountUi = Number(body?.amountUi);
+    const txSig = body?.txSig?.trim();
+    const marginfiAccount = body?.marginfiAccount?.trim();
+
+    if (!owner58 || !Number.isFinite(amountUi) || amountUi <= 0 || !txSig) {
+      return json(400, {
+        error: "owner58, positive amountUi, and txSig are required",
+      });
+    }
+
+    // Verify the tx succeeded before recording baseline
+    const conn = new Connection(RPC, "confirmed");
+    const st = (
+      await conn.getSignatureStatuses([txSig], {
+        searchTransactionHistory: true,
+      })
+    ).value?.[0];
+    if (!st || st.err) {
+      return json(400, {
+        error: "Transaction not confirmed/successful",
+        txSig,
+        err: st?.err ?? null,
+      });
     }
 
     await connectMongo();
 
-    // hard-set
-    if (Number.isFinite(body?.setBaselineUi)) {
-      const v = Number(body!.setBaselineUi);
-      if (v < 0) {
-        return NextResponse.json(
-          { error: "setBaselineUi must be >= 0" },
-          { status: 400 }
-        );
-      }
-      const setDoc: Record<string, unknown> = { savingsBaselineUi: v };
-      if (body?.marginfiAccount) {
-        setDoc["marginfi.accountPk"] = {
-          $cond: [
-            {
-              $or: [
-                { $eq: ["$marginfi", null] },
-                { $eq: ["$marginfi.accountPk", null] },
-              ],
-            },
-            body.marginfiAccount.trim(),
-            "$marginfi.accountPk",
-          ],
-        };
-      }
-      const res = await User.updateOne(
-        { "depositWallet.address": owner58 },
-        [{ $set: setDoc }],
-        { writeConcern: { w: "majority" } }
-      );
-      if (res.matchedCount !== 1)
-        return NextResponse.json(
-          { error: "User not found for provided owner58" },
-          { status: 404 }
-        );
-      return NextResponse.json({ ok: true, mode: "set", savingsBaselineUi: v });
-    }
-
-    // add
-    if (!Number.isFinite(body?.amountUi) || Number(body!.amountUi) <= 0) {
-      return NextResponse.json(
-        { error: "amountUi must be a positive number" },
-        { status: 400 }
-      );
-    }
-    const amt = Number(body!.amountUi);
-
-    const pipelineSet: Record<string, unknown> = {
-      savingsBaselineUi: {
-        $add: [{ $ifNull: ["$savingsBaselineUi", 0] }, amt],
-      },
-    };
-    if (body?.marginfiAccount) {
-      pipelineSet["marginfi.accountPk"] = {
+    // Write-once marginfi.accountPk setter if provided
+    const setPatch: Record<string, unknown> = {};
+    if (marginfiAccount) {
+      setPatch["marginfi.accountPk"] = {
         $cond: [
           {
             $or: [
               { $eq: ["$marginfi", null] },
               { $eq: ["$marginfi.accountPk", null] },
+              { $eq: ["$marginfi.accountPk", ""] },
             ],
           },
-          body.marginfiAccount.trim(),
+          marginfiAccount,
           "$marginfi.accountPk",
         ],
       };
@@ -354,18 +321,34 @@ export async function PATCH(req: NextRequest) {
 
     const res = await User.updateOne(
       { "depositWallet.address": owner58 },
-      [{ $set: pipelineSet }],
+      [
+        {
+          $set: {
+            // nested baseline
+            "savings.baselineValueUi": {
+              $add: [
+                { $ifNull: ["$savings.baselineValueUi", 0] },
+                Number(amountUi),
+              ],
+            },
+            // legacy mirror (if anything still reads it)
+            savingsBaselineUi: {
+              $add: [{ $ifNull: ["$savingsBaselineUi", 0] }, Number(amountUi)],
+            },
+            ...(Object.keys(setPatch).length ? setPatch : {}),
+          },
+        },
+      ],
       { writeConcern: { w: "majority" } }
     );
-    if (res.matchedCount !== 1)
-      return NextResponse.json(
-        { error: "User not found for provided owner58" },
-        { status: 404 }
-      );
-    return NextResponse.json({ ok: true, mode: "added", addedUi: amt });
+
+    if (res.matchedCount !== 1) {
+      return json(404, { error: "User not found for provided owner58" });
+    }
+
+    return json(200, { ok: true, recordedUi: Number(amountUi), txSig });
   } catch (e) {
-    const message =
-      e instanceof Error ? e.message : typeof e === "string" ? e : "failed";
-    return jsonError(message, 500, e);
+    const message = e instanceof Error ? e.message : "record failed";
+    return json(500, { error: message });
   }
 }

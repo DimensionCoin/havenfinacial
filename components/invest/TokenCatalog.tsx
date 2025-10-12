@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { X, Search } from "lucide-react";
 import {
   type TokenMeta,
@@ -30,7 +31,7 @@ const DEFAULT_CATEGORY_ORDER: TokenCategory[] = [
   "Meme",
   "Stocks",
 ];
-const MAINNET = "mainnet"; // hard-force mainnet UI everywhere
+const MAINNET = "mainnet";
 
 // Jupiter Lite endpoints for price/quote PREVIEW (server builds the real swap)
 const JUP_PRICE_BASE =
@@ -92,25 +93,12 @@ export default function TokenCatalog({
     TokenCategory | "All"
   >("All");
 
-  // prefer app's deposit wallet -> user's primary wallet -> first Privy Solana wallet
+  // prefer app deposit wallet -> user's primary wallet -> first Privy Solana wallet
   const depositOwnerBase58 = useMemo(() => {
-    const u = user as unknown;
-    let dep: string | undefined;
-    let w: string | undefined;
-    if (u && typeof u === "object") {
-      const rec = u as Record<string, unknown>;
-      const depObj = rec["depositWallet"] as
-        | Record<string, unknown>
-        | undefined;
-      const wObj = rec["wallet"] as Record<string, unknown> | undefined;
-      const depAddr = depObj?.["address"];
-      const wAddr = wObj?.["address"];
-      dep = typeof depAddr === "string" ? depAddr : undefined;
-      w = typeof wAddr === "string" ? wAddr : undefined;
-    }
-    const privyFirst = wallets[0]?.address;
-    return dep || w || privyFirst || "";
-  }, [user, wallets]);
+    const depositAddress = user?.depositWallet?.address;
+    const fallbackPrivyAddress = wallets[0]?.address;
+    return depositAddress || fallbackPrivyAddress || "";
+  }, [user?.depositWallet?.address, wallets]);
 
   // force mainnet token list
   const all = useMemo(() => tokensForCluster(MAINNET), []);
@@ -120,18 +108,15 @@ export default function TokenCatalog({
       ? all.filter((t) => t.category && categories.includes(t.category))
       : all;
 
-    // Apply category filter
     if (selectedCategory !== "All") {
       tokens = tokens.filter((t) => t.category === selectedCategory);
     }
 
-    // Apply search filter
     if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase().trim();
+      const q = searchQuery.toLowerCase().trim();
       tokens = tokens.filter(
         (t) =>
-          t.name.toLowerCase().includes(query) ||
-          t.symbol.toLowerCase().includes(query)
+          t.name.toLowerCase().includes(q) || t.symbol.toLowerCase().includes(q)
       );
     }
 
@@ -141,7 +126,6 @@ export default function TokenCatalog({
   const categoryOrder: TokenCategory[] = categories?.length
     ? categories
     : DEFAULT_CATEGORY_ORDER;
-
   const displayTokens = useMemo(() => filtered, [filtered]);
 
   /* ------------------------------ live prices ------------------------------ */
@@ -256,50 +240,49 @@ export default function TokenCatalog({
   /* -------------------------------- render -------------------------------- */
 
   return (
-    <div className={`min-h-screen bg-black/10 vision-perspective ${className}`}>
-      <header className="sticky top-0 z-10 bg-black/10 backdrop-blur-[40px] backdrop-saturate-[200%] border-b border-white/10">
-        <div className="container mx-auto px-4 py-4 sm:py-6">
-          <div className="max-w-md mx-auto mb-4 sm:mb-6">
-            <div className="relative group">
-              {/* Background glow effect */}
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700" />
-
-              <div className="relative vision-glass rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%]">
-                <Search className="absolute left-3 sm:left-4 top-1/2 transform -translate-y-1/2 text-white/60 w-4 h-4 sm:w-5 sm:h-5" />
+    <div className={`min-h-screen ${className || ""}`}>
+      {/* Compact sticky header */}
+      <header className="sticky top-0 z-20 border-b border-white/10 backdrop-blur-xl">
+        <div className="container mx-auto px-4 py-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+            {/* Search */}
+            <div className="relative flex-1">
+              <div className="absolute inset-0 rounded-2xl bg-white/5" />
+              <div className="relative rounded-2xl border border-white/15 bg-black/40">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60 w-4 h-4" />
                 <input
                   type="text"
-                  placeholder="Search tokens..."
+                  placeholder="Search by name or symbol"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-10 sm:pl-12 pr-3 sm:pr-4 py-3 sm:py-4 bg-transparent text-white placeholder-white/50 text-sm sm:text-base font-medium focus:outline-none focus:ring-0"
+                  className="w-full pl-9 pr-3 py-2.5 bg-transparent text-white placeholder-white/50 text-sm focus:outline-none"
                 />
               </div>
             </div>
-          </div>
 
-          <div className="flex justify-center">
-            <div className="flex flex-wrap gap-1.5 sm:gap-2 p-1.5 sm:p-2 bg-white/5 backdrop-blur-sm rounded-2xl border border-white/10 max-w-full overflow-x-auto">
+            {/* Categories */}
+            <div className="flex gap-1.5 overflow-x-auto pb-1 md:pb-0">
               <button
                 onClick={() => setSelectedCategory("All")}
-                className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all duration-300 whitespace-nowrap ${
+                className={`px-3 py-2 rounded-full text-xs font-semibold transition ${
                   selectedCategory === "All"
-                    ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30 shadow-[0_0_20px_rgba(182,255,62,0.3)]"
-                    : "text-white/70 hover:bg-white/10 hover:text-white border border-transparent"
+                    ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30"
+                    : "text-white/70 hover:text-white hover:bg-white/10"
                 }`}
               >
                 All
               </button>
-              {categoryOrder.map((category) => (
+              {categoryOrder.map((c) => (
                 <button
-                  key={category}
-                  onClick={() => setSelectedCategory(category)}
-                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-full text-xs sm:text-sm font-semibold transition-all duration-300 whitespace-nowrap ${
-                    selectedCategory === category
-                      ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30 shadow-[0_0_20px_rgba(182,255,62,0.3)]"
-                      : "text-white/70 hover:bg-white/10 hover:text-white border border-transparent"
+                  key={c}
+                  onClick={() => setSelectedCategory(c)}
+                  className={`px-3 py-2 rounded-full text-xs font-semibold transition whitespace-nowrap ${
+                    selectedCategory === c
+                      ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30"
+                      : "text-white/70 hover:text-white hover:bg-white/10"
                   }`}
                 >
-                  {category}
+                  {c}
                 </button>
               ))}
             </div>
@@ -307,26 +290,14 @@ export default function TokenCatalog({
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-4 sm:py-6">
+      {/* List */}
+      <main className="container mx-auto px-4 py-6">
         {!displayTokens.length ? (
-          <div className="text-center py-12">
-            <div className="relative group mx-auto mb-6 w-16 h-16 sm:w-20 sm:h-20">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-full blur-xl opacity-50" />
-              <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/5 backdrop-blur-sm border border-white/10 flex items-center justify-center">
-                <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-full bg-white/10" />
-              </div>
-            </div>
-            <div className="text-white mb-2 text-lg sm:text-xl font-bold">
-              {searchQuery ? "No tokens found" : "No tokens available"}
-            </div>
-            <div className="text-white/60 text-sm max-w-md mx-auto">
-              {searchQuery
-                ? `No tokens match "${searchQuery}"`
-                : "Add mints to mints.mainnet in /lib/tokens.ts"}
-            </div>
+          <div className="text-center py-20 text-white/70">
+            No tokens found.
           </div>
         ) : (
-          <div className="space-y-3 sm:space-y-4">
+          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {displayTokens.map((t) => {
               const mainnetMint = getMintFor(t, MAINNET);
               const p = mainnetMint ? prices[mainnetMint] : undefined;
@@ -350,103 +321,95 @@ export default function TokenCatalog({
                 !authenticated;
 
               return (
-                <div
+                <Link
                   key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
-                  className="relative group"
+                  href={`/invest/${t.symbol.toLowerCase()}`}
+                  className="group block rounded-2xl border border-white/10 backdrop-blur-xl p-4 transition hover:border-white/20 hover:bg-black/40"
+                  aria-label={`Open ${t.name} chart`}
                 >
-                  {/* Background glow effect */}
-                  <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/10 via-transparent to-[rgb(182,255,62)]/10 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
+                  <div className="flex items-start gap-3">
+                    {/* Logo */}
+                    <div className="relative">
+                      <Image
+                        src={
+                          t.logo ||
+                          "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                          "/placeholder.svg"
+                        }
+                        alt={`${t.name} logo`}
+                        width={40}
+                        height={40}
+                        className="h-10 w-10 rounded-xl border border-white/15 bg-white/5 object-contain"
+                      />
+                      {pricesLoading && (
+                        <div className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-[rgb(182,255,62)] animate-pulse" />
+                      )}
+                    </div>
 
-                  <div className="relative vision-window p-4 sm:p-6 rounded-2xl sm:rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_16px_32px_rgba(0,0,0,0.3)] hover:shadow-[0_20px_40px_rgba(0,0,0,0.4)] transition-all duration-500 transform-gpu hover:scale-[1.02]">
-                    {/* Subtle inner glow */}
-                    <div className="absolute inset-0 rounded-2xl sm:rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
+                    {/* Content */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate text-white font-semibold">
+                          {t.name}
+                        </span>
+                        <span className="text-xs px-2 py-0.5 rounded-md bg-white/10 text-white/70 border border-white/10">
+                          {t.symbol}
+                        </span>
+                        {t.category && (
+                          <span className="text-xs px-2 py-0.5 rounded-md bg-[rgb(182,255,62)]/10 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/20">
+                            {t.category}
+                          </span>
+                        )}
+                      </div>
 
-                    <div className="relative flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                      <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
-                        <div className="relative flex-shrink-0">
-                          <Image
-                            src={
-                              t.logo ||
-                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                              "/placeholder.svg" ||
-                              "/placeholder.svg" ||
-                              "/placeholder.svg" ||
-                              "/placeholder.svg"
-                            }
-                            alt={`${t.name} logo`}
-                            width={48}
-                            height={48}
-                            className="h-10 w-10 sm:h-14 sm:w-14 rounded-full sm:rounded-full border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
-                          />
-                          {pricesLoading && (
-                            <div className="absolute -top-0.5 -right-0.5 sm:-top-1 sm:-right-1 h-3 w-3 sm:h-4 sm:w-4 bg-[rgb(182,255,62)] rounded-full animate-pulse shadow-[0_0_20px_rgba(182,255,62,0.6)]" />
+                      <div className="mt-2 flex items-end justify-between gap-2">
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-white text-lg font-bold">
+                            {fmtMoney(local)}
+                          </span>
+                          {changeStr && (
+                            <span
+                              className={`text-xs font-semibold ${changeColor}`}
+                            >
+                              {typeof change === "number" && change > 0 && "↗ "}
+                              {typeof change === "number" && change < 0 && "↘ "}
+                              {changeStr}
+                            </span>
                           )}
                         </div>
 
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 mb-2">
-                            <span className="text-white font-bold text-base sm:text-lg tracking-tight truncate">
-                              {t.name}
-                            </span>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-xs text-white/70 font-semibold px-2 sm:px-3 py-1 bg-white/10 backdrop-blur-sm rounded-lg border border-white/10">
-                                {t.symbol}
-                              </span>
-                              {t.category && (
-                                <span className="text-xs text-[rgb(182,255,62)] font-medium px-2 py-1 bg-[rgb(182,255,62)]/10 rounded-lg">
-                                  {t.category}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-3 sm:gap-4">
-                            <span className="text-white font-black text-xl sm:text-2xl bg-gradient-to-br from-white via-white to-white/80 bg-clip-text">
-                              {fmtMoney(local)}
-                            </span>
-                            {changeStr && (
-                              <span
-                                className={`text-xs sm:text-sm font-semibold ${changeColor} flex items-center gap-1`}
-                              >
-                                {typeof change === "number" &&
-                                  change > 0 &&
-                                  "↗"}
-                                {typeof change === "number" &&
-                                  change < 0 &&
-                                  "↘"}
-                                {changeStr}
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                        {/* Buy button (stops link navigation) */}
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            openBuy(t);
+                          }}
+                          disabled={disabled}
+                          className="relative overflow-hidden rounded-xl px-3 py-2 text-xs font-bold border transition
+                                     bg-white/10 border-white/20 text-[rgb(182,255,62)]
+                                     hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40
+                                     disabled:opacity-50 disabled:cursor-not-allowed"
+                          aria-label={`Buy ${t.symbol}`}
+                        >
+                          <span className="absolute inset-0 -translate-x-full group-hover:translate-x-0 transition-transform duration-700 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+                          <span className="relative z-10">Buy</span>
+                        </button>
                       </div>
-
-                      <button
-                        onClick={() => openBuy(t)}
-                        disabled={disabled}
-                        className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-xl sm:rounded-2xl bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
-                      >
-                        {/* Enhanced shimmer effect on hover */}
-                        <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-
-                        <span className="relative z-10">Buy {t.symbol}</span>
-                      </button>
                     </div>
                   </div>
-                </div>
+                </Link>
               );
             })}
           </div>
         )}
 
         {pricesError && (
-          <div className="relative group mt-6">
-            <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
-            <div className="relative text-center p-4 sm:p-6 rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm">
-              <div className="text-red-400 font-semibold text-base sm:text-lg">
-                Failed to fetch prices
-              </div>
-              <div className="text-red-400/70 text-sm mt-2">{pricesError}</div>
+          <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-300">
+            <div className="font-semibold">We couldn’t load live prices.</div>
+            <div className="text-sm opacity-90 mt-1">{pricesError}</div>
+            <div className="text-xs opacity-70 mt-2">
+              Tip: check your connection or try again in a few seconds.
             </div>
           </div>
         )}
@@ -534,7 +497,7 @@ function BuyModal({
     };
   }, [outputMint, jupPriceBase]);
 
-  // net USDC-in after the fixed fee
+  // net USDC-in after the fixed fee (raw base units)
   const computeInAmountRaw = (): number => {
     if (!spendValid) return 0;
     const amountUsdGross =
@@ -543,11 +506,92 @@ function BuyModal({
     return Math.floor(amountUsdNet * 10 ** USDC_DECIMALS);
   };
 
-  // Quote USDC -> token for the preview panel
+  // --- robust quote helper (lite GET -> v6 POST fallback) ---
+  async function fetchJupQuoteRobust({
+    jupQuoteBase,
+    inputMint,
+    outputMint,
+    inAmount,
+  }: {
+    jupQuoteBase: string;
+    inputMint: string;
+    outputMint: string;
+    inAmount: number; // raw (base units)
+  }) {
+    // Skip tiny values (< 1 USDC cent) which usually fail to route
+    if (!inAmount || inAmount < 10_000) {
+      throw new Error("Amount too small for a route. Try a larger amount.");
+    }
+
+    // 1) Try lite-api GET first
+    const p1 = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount: String(inAmount),
+      slippageBps: "50",
+      swapMode: "ExactIn",
+    });
+    try {
+      const res = await fetch(`${jupQuoteBase}?${p1.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        // extract message if present
+        let message = `Lite quote ${res.status}`;
+        try {
+          const body = await res.json();
+          if (body?.error || body?.message) {
+            message += `: ${body.error || body.message}`;
+          }
+        } catch {}
+        throw new Error(message);
+      }
+      const j = await res.json();
+      if (j && j.outAmount) return j;
+      if (j?.data?.outAmount) return j.data;
+      if (Array.isArray(j?.data) && j.data[0]?.outAmount) return j.data[0];
+      throw new Error("Lite quote: empty response");
+    } catch {
+      // fall through to v6 POST
+    }
+
+    // 2) Fallback to v6 official quote API
+    const resV6 = await fetch("https://quote-api.jup.ag/v6/quote", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({
+        inputMint,
+        outputMint,
+        amount: inAmount,
+        slippageBps: 50,
+        swapMode: "ExactIn",
+        onlyDirectRoutes: false,
+        asLegacyTransaction: false,
+      }),
+    });
+    if (!resV6.ok) {
+      let message = `Jupiter v6 quote ${resV6.status}`;
+      try {
+        const body = await resV6.json();
+        if (body?.error || body?.message) {
+          message += `: ${body.error || body.message}`;
+        }
+      } catch {}
+      throw new Error(message);
+    }
+    const j6 = await resV6.json();
+    if (j6 && j6.outAmount) return j6;
+    throw new Error("Jupiter v6 quote: empty response");
+  }
+
+  // Quote USDC -> token for the preview panel (debounced, robust)
   useEffect(() => {
     if (!outputMint) return;
     let cancelled = false;
-    const t = setTimeout(async () => {
+    const handle = setTimeout(async () => {
       try {
         setQLoading(true);
         setQError(null);
@@ -559,24 +603,27 @@ function BuyModal({
           return;
         }
 
-        const url =
-          `${jupQuoteBase}?inputMint=${USDC_MAINNET}&outputMint=${outputMint}&amount=${inAmount}` +
-          `&slippageBps=50&restrictIntermediateTokens=true&dynamicSlippage=true`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) throw new Error(`quote ${res.status}`);
-        const j = (await res.json()) as JupQuote;
+        const q = await fetchJupQuoteRobust({
+          jupQuoteBase,
+          inputMint: USDC_MAINNET,
+          outputMint,
+          inAmount,
+        });
 
-        if (!cancelled) setQuote(j);
+        if (!cancelled) setQuote(q as JupQuote);
       } catch (e) {
-        if (!cancelled) setQError(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setQError(msg);
+        }
       } finally {
         if (!cancelled) setQLoading(false);
       }
-    }, 350);
+    }, 500);
 
     return () => {
-      clearTimeout(t);
       cancelled = true;
+      clearTimeout(handle);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amountStr, displayCurrency, fxRate, outputMint, jupQuoteBase]);
@@ -620,7 +667,6 @@ function BuyModal({
         accessToken,
       });
 
-      // Try to surface a short tx id in the toast
       const sigFromCall = res as string | null;
       const sig = sigFromCall || signature;
       const tail = sig ? ` • ${sig.slice(0, 6)}…${sig.slice(-6)}` : "";
@@ -632,7 +678,6 @@ function BuyModal({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e || "Failed");
       toast.error(`Purchase failed: ${msg}`, { id: toastId });
-      // swapError panel still shows below for context
     }
   }, [
     canSwap,
@@ -650,76 +695,61 @@ function BuyModal({
 
   return (
     <div
-      className="fixed inset-0 z-[9999] vision-perspective flex items-center justify-center p-4"
+      className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
       aria-modal="true"
       role="dialog"
     >
       <div
-        className="absolute inset-0 bg-black/80 backdrop-blur-2xl backdrop-saturate-150"
+        className="absolute inset-0 bg-black/70 backdrop-blur-2xl"
         onClick={onClose}
         aria-hidden
       />
-      <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_10%_85%,rgba(182,255,62,0.15),transparent),radial-gradient(35%_25%_at_90%_10%,rgba(182,255,62,0.12),transparent)]" />
-      </div>
-      <div className="pointer-events-auto w-full max-w-sm sm:max-w-lg vision-window vision-depth rounded-2xl sm:rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4)] p-4 sm:p-6 max-h-[90vh] overflow-y-auto">
-        {/* Subtle inner glow */}
-        <div className="absolute inset-0 rounded-2xl sm:rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
-
-        <div className="relative flex items-center justify-between mb-4 sm:mb-6">
-          <div className="flex items-center gap-2 sm:gap-3">
+      <div className="pointer-events-auto w-full max-w-sm sm:max-w-lg rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] p-5 shadow-[0_32px_64px_rgba(0,0,0,0.4)]">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
             <Image
               src={
                 token.logo ||
                 "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                "/placeholder.svg" ||
-                "/placeholder.svg" ||
-                "/placeholder.svg" ||
                 "/placeholder.svg"
               }
               alt={`${token.name} logo`}
-              width={40}
-              height={40}
-              className="h-10 w-10 sm:h-12 sm:w-12 rounded-xl sm:rounded-2xl border border-white/20 object-contain bg-white/5 backdrop-blur-sm"
+              width={44}
+              height={44}
+              className="h-11 w-11 rounded-xl border border-white/20 bg-white/5 object-contain"
             />
             <div>
-              <h4 className="text-white font-bold text-lg sm:text-xl tracking-tight">
+              <div className="text-white font-bold text-lg">
                 Buy {token.name}
-              </h4>
-              <div className="text-white/60 text-xs sm:text-sm font-medium">
-                {token.symbol}
               </div>
+              <div className="text-white/60 text-xs">{token.symbol}</div>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="vision-button rounded-xl sm:rounded-2xl p-2 sm:p-3 hover:bg-white/10 transition-all duration-300 text-white/70 hover:text-white"
+            className="rounded-xl p-2 text-white/70 hover:text-white hover:bg-white/10"
             aria-label="Close"
           >
-            <X className="w-4 h-4 sm:w-5 sm:h-5" />
+            <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="relative space-y-4 sm:space-y-6">
+        <div className="mt-5 space-y-5">
           <div>
-            <label className="block text-sm font-bold text-white mb-2 sm:mb-3">
+            <label className="block text-sm font-bold text-white mb-2">
               Spend ({displayCurrency})
             </label>
-            <div className="relative group">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700" />
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                value={amountStr}
-                onChange={(e) => setAmountStr(e.target.value)}
-                className="relative w-full px-3 sm:px-4 py-3 sm:py-4 bg-white/5 backdrop-blur-sm border border-white/20 rounded-xl sm:rounded-2xl text-white text-base sm:text-lg font-semibold placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 transition-all duration-300"
-                placeholder="0.00"
-                inputMode="decimal"
-              />
-            </div>
-
-            <div className="text-xs sm:text-sm text-white/60 mt-2 sm:mt-3 font-medium">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={amountStr}
+              onChange={(e) => setAmountStr(e.target.value)}
+              className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50"
+              placeholder="0.00"
+              inputMode="decimal"
+            />
+            <div className="mt-2 text-xs text-white/60">
               Processing fee:{" "}
               <span className="text-white font-semibold">
                 {new Intl.NumberFormat(undefined, {
@@ -727,113 +757,98 @@ function BuyModal({
                   currency: displayCurrency,
                   maximumFractionDigits: 2,
                 }).format(feeInDisplay)}
-              </span>{" "}
-              (deducted before purchase)
+              </span>
             </div>
           </div>
 
-          <div className="vision-glass rounded-xl sm:rounded-2xl p-4 sm:p-6 bg-white/5 backdrop-blur-sm border border-white/10">
+          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
             {!spendValid ? (
-              <div className="text-center py-4 sm:py-6">
-                <div className="text-red-400 font-semibold text-base sm:text-lg">
-                  Invalid amount
-                </div>
-                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
-                  Enter an amount greater than the fee
-                </div>
+              <div className="text-center text-red-300 text-sm">
+                Enter an amount greater than the fee.
               </div>
             ) : qLoading ? (
-              <div className="text-center py-4 sm:py-6">
-                <div className="text-white/70 font-medium text-sm sm:text-base">
-                  Getting live price...
-                </div>
+              <div className="text-center text-white/80 text-sm">
+                Getting a live price…
                 <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full bg-[rgb(182,255,62)] rounded-full animate-pulse w-1/2" />
+                  <div className="h-full rounded-full animate-pulse w-1/2 bg-white/60" />
                 </div>
               </div>
             ) : qError ? (
-              <div className="text-center py-4 sm:py-6">
-                <div className="text-red-400 font-semibold text-sm sm:text-base">
-                  Price fetch failed
-                </div>
-                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
-                  {qError}
+              <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-yellow-100 text-sm">
+                <div className="font-semibold">We couldn’t fetch a quote.</div>
+                <div className="opacity-90 mt-1">{qError}</div>
+                <ul className="list-disc ml-5 mt-2 text-xs opacity-80 space-y-1">
+                  <li>Try a larger amount (very small trades can’t route).</li>
+                  <li>
+                    If this is a new or illiquid token, routes may be limited.
+                  </li>
+                </ul>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => setAmountStr((prev) => prev)} // retrigger debounce
+                    className="px-3 py-1.5 rounded-md border border-white/20 bg-white/10 text-white/90 hover:bg-white/15 text-xs"
+                  >
+                    Try again
+                  </button>
                 </div>
               </div>
             ) : quote && outAmountUi != null ? (
-              <div className="space-y-3 sm:space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-white/70 font-medium text-sm sm:text-base">
-                    You&apos;ll receive:
-                  </span>
-                  <span className="text-white font-bold text-lg sm:text-xl bg-gradient-to-br from-white via-white to-white/80 bg-clip-text">
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-white/70 text-sm">You’ll receive</span>
+                  <span className="text-white font-bold text-lg">
                     {fmtToken(outAmountUi)} {token.symbol}
                   </span>
                 </div>
                 {quote.priceImpactPct && (
-                  <div className="flex justify-between items-center text-xs sm:text-sm">
-                    <span className="text-white/60">Price impact:</span>
-                    <span className="text-white/70 font-medium">
+                  <div className="flex items-center justify-between text-xs text-white/60">
+                    <span>Price impact</span>
+                    <span className="text-white/80">
                       {(Number(quote.priceImpactPct) * 100).toFixed(2)}%
                     </span>
                   </div>
                 )}
-                <div className="h-px bg-white/20" />
-                <div className="text-xs text-white/50 text-center font-medium">
-                  Live quote • Updates automatically
+                <div className="text-center text-xs text-white/50 pt-1">
+                  Live quote
                 </div>
               </div>
             ) : (
-              <div className="text-center py-4 sm:py-6 text-white/60 font-medium text-sm sm:text-base">
-                Enter an amount to see a live price
+              <div className="text-center text-white/60 text-sm">
+                Enter an amount to see a live quote.
               </div>
             )}
           </div>
 
           {swapError && (
-            <div className="relative group">
-              <div className="absolute -inset-1 bg-gradient-to-r from-red-500/20 via-transparent to-red-500/20 rounded-2xl blur-xl opacity-50" />
-              <div className="relative rounded-xl sm:rounded-2xl bg-red-500/10 border border-red-500/30 backdrop-blur-sm p-3 sm:p-4">
-                <div className="text-red-400 font-semibold text-sm sm:text-base">
-                  Purchase failed
-                </div>
-                <div className="text-red-400/70 text-xs sm:text-sm mt-1">
-                  {swapError}
-                </div>
-              </div>
+            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-red-300 text-sm">
+              <div className="font-semibold">Purchase failed.</div>
+              <div className="opacity-90 mt-1">{swapError}</div>
             </div>
           )}
           {signature && (
-            <div className="relative group">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-50" />
-              <div className="relative rounded-xl sm:rounded-2xl bg-[rgb(182,255,62)]/10 border border-[rgb(182,255,62)]/30 backdrop-blur-sm p-3 sm:p-4">
-                <div className="text-[rgb(182,255,62)] font-semibold text-sm sm:text-base">
-                  Purchase submitted successfully!
-                </div>
-              </div>
+            <div className="rounded-xl border border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/10 p-3 text-[rgb(182,255,62)] text-sm">
+              Purchase submitted!
             </div>
           )}
-        </div>
 
-        <div className="relative flex flex-col sm:flex-row items-center justify-end gap-3 sm:gap-4 mt-6 sm:mt-8 pt-4 sm:pt-6 border-t border-white/10">
-          <button
-            onClick={onClose}
-            className="vision-button w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 text-white/80 hover:text-white rounded-xl sm:rounded-2xl bg-white/5 border border-white/20 hover:bg-white/10 hover:border-white/30 transition-all duration-300 backdrop-blur-sm font-semibold text-sm sm:text-base"
-          >
-            Cancel
-          </button>
-          <button
-            disabled={!canSwap}
-            onClick={onBuy}
-            className="group/btn relative overflow-hidden vision-button w-full sm:w-auto px-4 sm:px-6 py-2.5 sm:py-3 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl sm:rounded-2xl bg-[rgb(182,255,62)]/20 border border-[rgb(182,255,62)]/40 hover:bg-[rgb(182,255,62)]/30 hover:border-[rgb(182,255,62)]/60 hover:shadow-[0_8px_32px_rgba(182,255,62,0.3)] transition-all duration-300 backdrop-blur-sm font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
-          >
-            {/* Enhanced shimmer effect on hover */}
-            <div className="absolute inset-0 -translate-x-full group-hover/btn:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-
-            <span className="relative z-10">
-              {swapping ? "Processing..." : `Buy ${token.symbol}`}
-            </span>
-          </button>
+          <div className="flex flex-col sm:flex-row gap-3 justify-end">
+            <button
+              onClick={onClose}
+              className="w-full sm:w-auto rounded-xl border border-white/20 bg-white/5 px-5 py-3 text-white/80 hover:text-white hover:bg-white/10"
+            >
+              Cancel
+            </button>
+            <button
+              disabled={!canSwap}
+              onClick={onBuy}
+              className="w-full sm:w-auto relative overflow-hidden rounded-xl px-5 py-3 font-bold text-[rgb(182,255,62)]
+                         border border-[rgb(182,255,62)]/40 bg-[rgb(182,255,62)]/20
+                         hover:bg-[rgb(182,255,62)]/30 hover:border-[rgb(182,255,62)]/60
+                         disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {swapping ? "Processing…" : `Buy ${token.symbol}`}
+            </button>
+          </div>
         </div>
       </div>
     </div>

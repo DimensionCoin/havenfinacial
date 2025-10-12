@@ -18,6 +18,7 @@ import {
 } from "@/lib/tokens";
 
 import { useServerSponsoredJupSell } from "@/hooks/useServerSponsoredJupSell";
+import Link from "next/link";
 
 /* ------------------------------ config/env ------------------------------- */
 
@@ -444,68 +445,75 @@ export default function WalletHoldings({
               const valueLocal = row.valueUsd * fxRate;
 
               return (
-                <div
+                <Link
                   key={`${row.token.symbol}-${clusterMint ?? "nomint"}`}
-                  className="relative group"
+                  href={`/invest/${row.token.symbol.toLowerCase()}`}
+                  className="block"
                 >
-                  {/* Subtle hover effect */}
-                  <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none" />
+                  {" "}
+                  <div
+                    key={`${row.token.symbol}-${clusterMint ?? "nomint"}`}
+                    className="relative group"
+                  >
+                    {/* Subtle hover effect */}
+                    <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none" />
 
-                  <div className="relative p-4 rounded-2xl border border-white/10 bg-black/20 backdrop-blur-[20px] backdrop-saturate-[150%] hover:bg-black/30 hover:border-white/20 transition-all duration-300">
-                    <div className="flex items-center justify-between">
-                      {/* Left side - Token info */}
-                      <div className="flex items-center gap-3 flex-1 min-w-0">
-                        <div className="relative flex-shrink-0">
-                          <Image
-                            src={
-                              row.token.logo ||
-                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                              "/placeholder.svg"
-                            }
-                            alt={`${row.token.name} logo`}
-                            width={40}
-                            height={40}
-                            className="h-10 w-10 rounded-full border border-white/20 object-contain bg-white/5"
-                          />
-                        </div>
-
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="text-white font-semibold text-base truncate">
-                              {row.token.name}
-                            </span>
+                    <div className="relative p-4 rounded-2xl border border-white/10 bg-black/20 backdrop-blur-[20px] backdrop-saturate-[150%] hover:bg-black/30 hover:border-white/20 transition-all duration-300">
+                      <div className="flex items-center justify-between">
+                        {/* Left side - Token info */}
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <div className="relative flex-shrink-0">
+                            <Image
+                              src={
+                                row.token.logo ||
+                                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                                "/placeholder.svg"
+                              }
+                              alt={`${row.token.name} logo`}
+                              width={40}
+                              height={40}
+                              className="h-10 w-10 rounded-full border border-white/20 object-contain bg-white/5"
+                            />
                           </div>
-                          <div className="text-white/60 text-sm">
-                            {row.amount.toLocaleString(undefined, {
-                              maximumFractionDigits:
-                                row.amount < 1
-                                  ? Math.min(row.decimals, 8)
-                                  : Math.min(row.decimals, 4),
-                            })}{" "}
-                            {row.token.symbol}
-                          </div>
-                        </div>
-                      </div>
 
-                      {/* Right side - Values and sell button */}
-                      <div className="flex items-center gap-3">
-                        <div className="text-right">
-                          <div className="text-white font-semibold text-base">
-                            ${fmtMoneyWithoutCurrency(valueLocal)}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-white font-semibold text-base truncate">
+                                {row.token.name}
+                              </span>
+                            </div>
+                            <div className="text-white/60 text-sm">
+                              {row.amount.toLocaleString(undefined, {
+                                maximumFractionDigits:
+                                  row.amount < 1
+                                    ? Math.min(row.decimals, 8)
+                                    : Math.min(row.decimals, 4),
+                              })}{" "}
+                              {row.token.symbol}
+                            </div>
                           </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={() => openSell(row)}
-                          className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-lg bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
-                        >
-                          Sell
-                        </button>
+                        {/* Right side - Values and sell button */}
+                        <div className="flex items-center gap-3">
+                          <div className="text-right">
+                            <div className="text-white font-semibold text-base">
+                              ${fmtMoneyWithoutCurrency(valueLocal)}
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => openSell(row)}
+                            className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-lg bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
+                          >
+                            Sell
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                </Link>
               );
             })}
 

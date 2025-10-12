@@ -12,60 +12,37 @@ declare global {
   }
 }
 
-// Ensure Buffer exists in the browser
 if (typeof window !== "undefined") {
   window.Buffer = window.Buffer || Buffer;
 }
 
-type CommonParams = {
-  owner58: string;
-  decimals?: number; // default 6
-  privyId?: string; // optional; helps server link user for DB update
-  signer?: (tx: VersionedTransaction) => Promise<VersionedTransaction>; // optional override (Privy)
-};
-
-type DepositParams = CommonParams & {
-  amountUi: number;
-  ensureAta?: boolean; // default true
-  marginfiAccount?: string | null; // optional override; otherwise server looks up in DB
-};
-
-type WithdrawParams = CommonParams & {
-  amountUi?: number; // optional if withdrawAll=true
-  withdrawAll?: boolean; // default false
-  ensureAta?: boolean; // default true (creates destination ATA if needed)
-  marginfiAccount?: string | null; // required by API; pass if you have it
-};
-
-type TxResult = {
-  signature: string;
-  marginfiAccount: string;
-  userUsdcAta?: string | null;
-};
-
+/* ───────── helpers ───────── */
 type JsonObject = Record<string, unknown>;
 
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null;
-}
+const isJsonObject = (v: unknown): v is JsonObject =>
+  typeof v === "object" && v !== null;
 
-function readString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
+const readString = (v: unknown): string | null =>
+  typeof v === "string" ? v : null;
 
-function readStringProp(obj: JsonObject, key: string): string | null {
-  return readString(obj[key]);
-}
+const readStringProp = (o: JsonObject, k: string): string | null =>
+  readString(o[k]);
 
-function readLogsTail(obj: JsonObject, max = 10): string | null {
-  const raw = obj.logs;
+const readNumber = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+const readNumberProp = (o: JsonObject, k: string): number | null =>
+  readNumber(o[k]);
+
+const readLogsTail = (o: JsonObject, max = 10): string | null => {
+  const raw = (o as any)?.logs;
   if (!Array.isArray(raw)) return null;
-  const logs = raw.filter((entry): entry is string => typeof entry === "string");
+  const logs = raw.filter((e: unknown): e is string => typeof e === "string");
   return logs.length ? logs.slice(-max).join("\n") : null;
-}
+};
 
-function extractErrorField(obj: JsonObject): string | null {
-  const raw = obj.error;
+const extractErrorField = (o: JsonObject): string | null => {
+  const raw = (o as any)?.error;
   if (raw instanceof Error) return raw.message;
   if (typeof raw === "string") return raw;
   if (raw && typeof raw === "object" && "message" in raw) {
@@ -73,13 +50,12 @@ function extractErrorField(obj: JsonObject): string | null {
     if (typeof maybe === "string") return maybe;
   }
   return null;
-}
+};
 
-function tailLogs(value: unknown, max = 10): string | null {
-  return isJsonObject(value) ? readLogsTail(value, max) : null;
-}
+const tailLogs = (v: unknown, max = 10): string | null =>
+  isJsonObject(v) ? readLogsTail(v, max) : null;
 
-function errorMessage(err: unknown, fallback: string): string {
+const errorMessage = (err: unknown, fallback: string): string => {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
   if (err && typeof err === "object" && "message" in err) {
@@ -87,14 +63,48 @@ function errorMessage(err: unknown, fallback: string): string {
     if (typeof maybe === "string") return maybe;
   }
   return fallback;
-}
+};
+
+// Keep DB math consistent with on-chain UI units (USDC 6dp)
+const floorUsdc = (n: number) => Math.floor(n * 1e6) / 1e6;
+
+// If your server records at a different endpoint, change this:
+const RECORD_URL = "/api/savings/actions";
+
+/* ───────── types ───────── */
+type CommonParams = {
+  owner58: string;
+  decimals?: number; // default 6
+  privyId?: string; // optional
+  signer?: (tx: VersionedTransaction) => Promise<VersionedTransaction>;
+};
+
+type DepositParams = CommonParams & {
+  amountUi: number;
+  ensureAta?: boolean; // default true
+  marginfiAccount?: string | null; // optional override
+};
+
+type WithdrawParams = CommonParams & {
+  amountUi?: number; // optional when withdrawAll=true
+  withdrawAll?: boolean; // default false
+  ensureAta?: boolean; // default true (ATA for destination)
+  marginfiAccount?: string | null; // required by API
+};
+
+type TxResult = {
+  signature: string;
+  marginfiAccount: string;
+  userUsdcAta?: string | null;
+  settledAmountUi?: number | null; // optional from server for withdrawAll/exactness
+};
 
 export function useSavingsActions() {
   const { signTransaction } = useWallet();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** Build → user-sign → server-cosign+send (Deposit) */
+  /** Build → user-sign → server-send → record (Deposit) */
   const deposit = useCallback(
     async ({
       owner58,
@@ -109,7 +119,7 @@ export function useSavingsActions() {
       setError(null);
 
       const doOnce = async (): Promise<TxResult> => {
-        // 1) Build server-paid tx
+        // 1) prepare
         const prepRes = await fetch("/api/savings/prepare-deposit", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -133,16 +143,15 @@ export function useSavingsActions() {
             `prepare-deposit failed (HTTP ${prepRes.status})`;
           throw new Error(msg);
         }
-
-        const b64 = transaction;
         const mfiAccount = readStringProp(prepJson, "marginfiAccount");
-        if (!mfiAccount) {
+        if (!mfiAccount)
           throw new Error("Missing marginfiAccount in prepare response");
-        }
         const userUsdcAta = readStringProp(prepJson, "userUsdcAta");
 
-        // 2) User signs (wallet or provided signer)
-        const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
+        // 2) user signs
+        const tx = VersionedTransaction.deserialize(
+          Buffer.from(transaction, "base64")
+        );
         const doSign = signer ?? signTransaction;
         if (!doSign) throw new Error("Wallet signer not available");
         const signedTx = await doSign(tx);
@@ -150,7 +159,7 @@ export function useSavingsActions() {
           "base64"
         );
 
-        // 3) Server co-signs (Haven) + sends + persists
+        // 3) send
         const sendRes = await fetch("/api/savings/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -169,7 +178,10 @@ export function useSavingsActions() {
         const sendJsonRaw = await sendRes.json().catch(() => ({}));
         const sendJson = isJsonObject(sendJsonRaw) ? sendJsonRaw : {};
         const signature = readStringProp(sendJson, "signature");
-        const sendOk = sendJson.ok === true;
+        const sendOk = (sendJson as any)?.ok === true;
+        const settledAmountUi =
+          readNumberProp(sendJson, "settledAmountUi") ?? null; // optional (if server returns)
+
         if (!sendRes.ok || !sendOk || !signature) {
           const parts: string[] = [];
           const errMsg = extractErrorField(sendJson);
@@ -181,26 +193,44 @@ export function useSavingsActions() {
           throw new Error(msg);
         }
 
+        // 4) record (non-fatal)
+        try {
+          await fetch(RECORD_URL, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            cache: "no-store",
+            body: JSON.stringify({
+              kind: "deposit",
+              owner58,
+              marginfiAccount: mfiAccount,
+              txSig: signature,
+              amountUi: floorUsdc(
+                typeof settledAmountUi === "number" ? settledAmountUi : amountUi
+              ),
+            }),
+          });
+        } catch {
+          // swallow: chain send succeeded; you can retry recording later
+        }
+
         return {
           signature,
           marginfiAccount: mfiAccount,
           userUsdcAta: userUsdcAta ?? null,
+          settledAmountUi,
         };
       };
 
       try {
         return await doOnce();
       } catch (err: unknown) {
-        // One automatic retry if blockhash expired (server uses 409 for that)
         const msg = errorMessage(err, "");
-        const low = msg.toLowerCase();
-        if (low.includes("blockhash")) {
+        if (msg.toLowerCase().includes("blockhash")) {
           try {
             return await doOnce();
           } catch (e2) {
-            setError(
-              errorMessage(e2, "deposit failed after blockhash retry")
-            );
+            setError(errorMessage(e2, "deposit failed after blockhash retry"));
             throw e2;
           }
         }
@@ -213,7 +243,7 @@ export function useSavingsActions() {
     [signTransaction]
   );
 
-  /** Withdraw: build → user-sign → server-cosign+send (mirrors deposit) */
+  /** Build → user-sign → server-send → record (Withdraw) */
   const withdraw = useCallback(
     async ({
       owner58,
@@ -229,7 +259,7 @@ export function useSavingsActions() {
       setError(null);
 
       const doOnce = async (): Promise<TxResult> => {
-        // 1) Build server-paid withdraw tx
+        // 1) prepare
         const prepRes = await fetch("/api/savings/prepare-withdraw", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -240,7 +270,7 @@ export function useSavingsActions() {
             amountUi: withdrawAll ? 0 : amountUi, // server ignores when withdrawAll=true
             decimals,
             ensureAta,
-            marginfiAccount, // required by API (existing account)
+            marginfiAccount,
             withdrawAll,
           }),
         });
@@ -254,16 +284,15 @@ export function useSavingsActions() {
             `prepare-withdraw failed (HTTP ${prepRes.status})`;
           throw new Error(msg);
         }
-
-        const b64 = transaction;
         const mfiAccount = readStringProp(prepJson, "marginfiAccount");
-        if (!mfiAccount) {
+        if (!mfiAccount)
           throw new Error("Missing marginfiAccount in prepare response");
-        }
         const userUsdcAta = readStringProp(prepJson, "userUsdcAta");
 
-        // 2) User signs
-        const tx = VersionedTransaction.deserialize(Buffer.from(b64, "base64"));
+        // 2) user signs
+        const tx = VersionedTransaction.deserialize(
+          Buffer.from(transaction, "base64")
+        );
         const doSign = signer ?? signTransaction;
         if (!doSign) throw new Error("Wallet signer not available");
         const signedTx = await doSign(tx);
@@ -271,7 +300,7 @@ export function useSavingsActions() {
           "base64"
         );
 
-        // 3) Server co-signs (Haven) + sends + persists
+        // 3) send
         const sendRes = await fetch("/api/savings/send", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -290,7 +319,11 @@ export function useSavingsActions() {
         const sendJsonRaw = await sendRes.json().catch(() => ({}));
         const sendJson = isJsonObject(sendJsonRaw) ? sendJsonRaw : {};
         const signature = readStringProp(sendJson, "signature");
-        const sendOk = sendJson.ok === true;
+        const sendOk = (sendJson as any)?.ok === true;
+        // Prefer exact settled amount from server (especially for withdrawAll)
+        const settledAmountUi =
+          readNumberProp(sendJson, "settledAmountUi") ?? null;
+
         if (!sendRes.ok || !sendOk || !signature) {
           const parts: string[] = [];
           const errMsg = extractErrorField(sendJson);
@@ -302,10 +335,38 @@ export function useSavingsActions() {
           throw new Error(msg);
         }
 
+        // 4) record (non-fatal)
+        try {
+          const amountForRecord =
+            typeof settledAmountUi === "number"
+              ? settledAmountUi
+              : withdrawAll
+              ? 0 // server should compute true amount when withdrawAll=true
+              : amountUi ?? 0;
+
+          await fetch(RECORD_URL, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            cache: "no-store",
+            body: JSON.stringify({
+              kind: "withdraw",
+              owner58,
+              marginfiAccount: mfiAccount,
+              txSig: signature,
+              withdrawAll,
+              amountUi: floorUsdc(amountForRecord),
+            }),
+          });
+        } catch {
+          // swallow; can re-sync from chain later
+        }
+
         return {
           signature,
           marginfiAccount: mfiAccount,
           userUsdcAta: userUsdcAta ?? null,
+          settledAmountUi,
         };
       };
 
@@ -313,14 +374,11 @@ export function useSavingsActions() {
         return await doOnce();
       } catch (err: unknown) {
         const msg = errorMessage(err, "");
-        const low = msg.toLowerCase();
-        if (low.includes("blockhash")) {
+        if (msg.toLowerCase().includes("blockhash")) {
           try {
             return await doOnce();
           } catch (e2) {
-            setError(
-              errorMessage(e2, "withdraw failed after blockhash retry")
-            );
+            setError(errorMessage(e2, "withdraw failed after blockhash retry"));
             throw e2;
           }
         }
