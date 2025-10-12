@@ -1,17 +1,20 @@
+// app/(wherever)/SavingsAccount.tsx
 "use client";
 
 import type React from "react";
-import { useCallback, useEffect, useState, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Download, Upload } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
 import { useUser } from "@/providers/UserProvider";
+import { useBalances } from "@/providers/BalanceProvider";
+import { useSavingsInterest } from "@/hooks/useSavingsInterest";
+import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
+import { useSavingsActions } from "@/hooks/useSavingsActions";
 import type { VersionedTransaction } from "@solana/web3.js";
 import { Buffer } from "buffer";
-import { useSavingsDeposit } from "@/hooks/useSavingsDeposit";
-import { useSavingsActions } from "@/hooks/useSavingsActions"; // deposit + withdraw
 
 // Ensure Buffer exists in the browser
 if (typeof window !== "undefined") {
@@ -22,15 +25,15 @@ if (typeof window !== "undefined") {
 /* --------------------------- Types --------------------------- */
 type FxResponse = {
   base: "USD";
-  target: string;
-  rate: number; // USD -> target
+  target: string; // user's display currency
+  rate: number; // USD -> target (e.g., 1 USD = 1.37 CAD => rate=1.37)
   amount: number;
   converted: number;
   asOf?: string | null;
 };
 
 type ApyApiResponse = {
-  apy?: number; // e.g. 0.0874 for 8.74%
+  apy?: number; // decimal (e.g. 0.0874 for 8.74%)
   error?: string;
   note?: string;
 };
@@ -83,15 +86,15 @@ const SavingsAccount: React.FC = () => {
   const { user, loading: userLoading, refresh: refreshUser } = useUser();
   const { ready, authenticated, getAccessToken } = usePrivy();
   const { wallets: solWallets } = useSolanaWallets();
+  const balances = useBalances();
 
-  // First-time "open & deposit"
+  // Hooks for on-chain actions
   const {
     deposit: openAndDepositHook,
     loading: hookLoading,
     error: hookErr,
   } = useSavingsDeposit();
 
-  // Later deposits/withdrawals
   const {
     deposit: depositAction,
     withdraw: withdrawAction,
@@ -100,84 +103,65 @@ const SavingsAccount: React.FC = () => {
   } = useSavingsActions();
 
   const walletAddress = user?.depositWallet?.address ?? null;
-  const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
+  const displayCurrency = useMemo(() => {
+    const c = (user?.displayCurrency || "USD").toUpperCase();
+    // normalize "USDC" to USD for UI/FX purposes
+    return c === "USDC" ? "USD" : c;
+  }, [user?.displayCurrency]);
 
   const hasMarginfiAccount = !!user?.marginfi?.accountPk;
   const cachedAccountPk = user?.marginfi?.accountPk || null;
 
-  // local state
-  const [savingsUsdc, setSavingsUsdc] = useState<number>(0);
-  const [balLoading, setBalLoading] = useState<boolean>(false);
-  const [fxLoading, setFxLoading] = useState<boolean>(false);
-  const [fxRate, setFxRate] = useState<number>(1); // USD -> displayCurrency
+  // Savings balance (USD-pegged) from BalanceProvider
+  const savingsSlice = balances.savings;
+  const savingsUsdc = Number(savingsSlice?.amountUsd ?? 0) || 0;
+
+  // Interest hook (baseline from DB, balance from provider)
+  const {
+    interestUsd,
+    loading: interestLoading,
+    error: interestErr,
+    refresh: refreshInterest,
+  } = useSavingsInterest();
+
+  // FX
+  const [fxLoading, setFxLoading] = useState(false);
+  const [fxRate, setFxRate] = useState(1); // USD -> displayCurrency
   const [err, setErr] = useState<string | null>(null);
 
-  // APY state
-  const [apyLoading, setApyLoading] = useState<boolean>(false);
+  // APY display
+  const [apyLoading, setApyLoading] = useState(false);
   const [apyPct, setApyPct] = useState<number | null>(null);
 
-  // modal state
+  // modals
   type Modal = null | { kind: "deposit" | "withdraw" };
   const [modal, setModal] = useState<Modal>(null);
   const [openModal, setOpenModal] = useState(false);
 
+  // combine loading
   const loading =
-    userLoading || balLoading || fxLoading || hookLoading || actionsLoading;
+    userLoading ||
+    savingsSlice.loading ||
+    fxLoading ||
+    hookLoading ||
+    actionsLoading ||
+    interestLoading;
 
-  /* --------------------- Balance & FX ---------------------- */
-  const refreshBalance = useCallback(async (): Promise<void> => {
-    console.log("[UI] refreshBalance", { walletAddress, hasMarginfiAccount });
-    if (!walletAddress || !hasMarginfiAccount) {
-      setSavingsUsdc(0);
-      return;
-    }
-    setBalLoading(true);
-    try {
-      const r = await fetch(
-        `/api/savings/balance?owner58=${encodeURIComponent(walletAddress)}`,
-        { cache: "no-store" }
-      );
-      const raw = await r.text();
-      console.log("[UI] /api/savings/balance raw:", raw);
-      if (!r.ok) throw new Error(raw);
-      const j = JSON.parse(raw) as { amountUi?: number };
-      const amt = Number(j?.amountUi || 0);
-      console.log("[UI] parsed balance:", { amountUi: amt });
-      setSavingsUsdc(amt);
-    } catch (e) {
-      console.error("[UI] refreshBalance error:", e);
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBalLoading(false);
-    }
-  }, [walletAddress, hasMarginfiAccount]);
-
-  useEffect(() => {
-    if (!hasMarginfiAccount) return;
-    void refreshBalance();
-  }, [refreshBalance, hasMarginfiAccount]);
-
+  /* --------------------- APY (display only) ---------------------- */
   const refreshApy = useCallback(async (): Promise<void> => {
     if (!hasMarginfiAccount) {
       setApyPct(null);
       return;
     }
-
-    console.log("[UI] refreshApy start", { hasMarginfiAccount });
     setApyLoading(true);
     try {
       const r = await fetch(`/api/savings/apy`, { cache: "no-store" });
       const raw = await r.text();
-      console.log("[UI] /api/savings/apy raw:", raw);
       const j = JSON.parse(raw) as ApyApiResponse;
       if (!r.ok) throw new Error(j?.error || "Failed to fetch APY");
-
       const apyDecimal = typeof j.apy === "number" ? j.apy : null;
-      const pct = apyDecimal != null ? apyDecimal * 100 : null;
-      console.log("[UI] parsed APY:", { apyDecimal, pct });
-      setApyPct(pct);
-    } catch (e) {
-      console.error("[UI] refreshApy error:", e);
+      setApyPct(apyDecimal != null ? apyDecimal * 100 : null);
+    } catch {
       setApyPct(null);
     } finally {
       setApyLoading(false);
@@ -188,6 +172,7 @@ const SavingsAccount: React.FC = () => {
     void refreshApy();
   }, [refreshApy]);
 
+  /* --------------------- FX (fetch even before account exists) ---------------------- */
   const convertFx = useCallback(
     async (amount: number, currency: string): Promise<FxResponse> => {
       const accessToken = authenticated
@@ -209,16 +194,13 @@ const SavingsAccount: React.FC = () => {
         "FX fetch"
       );
       const raw = await resp.text();
-      console.log("[UI] /api/fx raw:", raw);
       if (!resp.ok) throw new Error(raw);
       return JSON.parse(raw) as FxResponse;
     },
     [authenticated, getAccessToken]
   );
 
-  // fetch USD -> display rate
   useEffect(() => {
-    if (!hasMarginfiAccount) return;
     let cancelled = false;
     (async () => {
       setErr(null);
@@ -228,13 +210,10 @@ const SavingsAccount: React.FC = () => {
       }
       setFxLoading(true);
       try {
-        const fx = await convertFx(savingsUsdc, displayCurrency);
-        if (!cancelled) {
-          console.log("[UI] FX parsed:", fx);
-          setFxRate(fx.rate);
-        }
+        // use '1' to get a clean USD->display rate; not dependent on balance
+        const fx = await convertFx(1, displayCurrency);
+        if (!cancelled) setFxRate(fx.rate);
       } catch (e) {
-        console.error("[UI] FX error:", e);
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
       } finally {
         if (!cancelled) setFxLoading(false);
@@ -243,23 +222,33 @@ const SavingsAccount: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [hasMarginfiAccount, savingsUsdc, displayCurrency, convertFx]);
+  }, [displayCurrency, convertFx]);
 
-  // balance in user's local currency
+  // balances and interest in user's local currency
   const fiatValue = useMemo(() => savingsUsdc * fxRate, [savingsUsdc, fxRate]);
+  const interestFiat = useMemo(
+    () => interestUsd * fxRate,
+    [interestUsd, fxRate]
+  );
 
+  // manual refresh pulls everything (balances, apy, interest, user)
   const manualRefresh = useCallback(async () => {
     setErr(null);
-    await Promise.all([refreshBalance(), refreshApy()]);
-  }, [refreshBalance, refreshApy]);
+    await Promise.all([
+      savingsSlice?.refresh?.(),
+      refreshApy(),
+      refreshInterest(),
+      refreshUser(),
+    ]);
+  }, [savingsSlice, refreshApy, refreshInterest, refreshUser]);
 
-  // Convert a local amount to USD for on-chain (USDC)
+  // Convert a local amount (user currency) to USD for on-chain (USDC)
   const toUsd = useCallback(
     (amountLocal: number) => {
       if (displayCurrency === "USD") return amountLocal;
-      const r = Number(fxRate);
+      const r = Number(fxRate); // USD -> display
       if (!Number.isFinite(r) || r <= 0) return amountLocal; // fallback
-      return amountLocal / r;
+      return amountLocal / r; // local -> USD
     },
     [displayCurrency, fxRate]
   );
@@ -299,7 +288,12 @@ const SavingsAccount: React.FC = () => {
 
         toast.success("Savings account opened and funded ✅");
         setOpenModal(false);
-        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+        await Promise.all([
+          refreshUser(),
+          savingsSlice.refresh(),
+          refreshApy(),
+          refreshInterest(), // ensures baseline/interest recomputed
+        ]);
       } catch (e: unknown) {
         const message =
           e instanceof Error ? e.message : "Failed to open & fund account";
@@ -314,8 +308,9 @@ const SavingsAccount: React.FC = () => {
       signWithPrivy,
       user?.privyId,
       refreshUser,
-      refreshBalance,
+      savingsSlice,
       refreshApy,
+      refreshInterest,
       toUsd,
     ]
   );
@@ -333,12 +328,6 @@ const SavingsAccount: React.FC = () => {
         const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
 
         if (kind === "deposit") {
-          console.log("[UI] depositAction start", {
-            owner58: walletAddress,
-            amountUsdUi,
-            marginfiAccount: cachedAccountPk,
-          });
-
           await depositAction({
             owner58: walletAddress,
             amountUi: amountUsdUi,
@@ -348,15 +337,8 @@ const SavingsAccount: React.FC = () => {
             privyId: user?.privyId,
             signer: signWithPrivy,
           });
-
           toast.success("Deposit submitted ✅");
         } else {
-          console.log("[UI] withdrawAction start", {
-            owner58: walletAddress,
-            amountUsdUi,
-            marginfiAccount: cachedAccountPk,
-          });
-
           await withdrawAction({
             owner58: walletAddress,
             amountUi: amountUsdUi,
@@ -366,14 +348,17 @@ const SavingsAccount: React.FC = () => {
             privyId: user?.privyId,
             signer: signWithPrivy,
           });
-
           toast.success("Withdrawal submitted ✅");
         }
 
         setModal(null);
-        await Promise.all([refreshUser(), refreshBalance(), refreshApy()]);
+        await Promise.all([
+          refreshUser(),
+          savingsSlice.refresh(),
+          refreshApy(),
+          refreshInterest(), // recompute interest from new baseline + balance
+        ]);
       } catch (e) {
-        console.error("[UI] submit error:", e);
         toast.error(
           e instanceof Error ? e.message : `Failed to ${kind} savings`
         );
@@ -386,8 +371,9 @@ const SavingsAccount: React.FC = () => {
       user?.privyId,
       cachedAccountPk,
       refreshUser,
-      refreshBalance,
+      savingsSlice,
       refreshApy,
+      refreshInterest,
       depositAction,
       withdrawAction,
       signWithPrivy,
@@ -407,19 +393,15 @@ const SavingsAccount: React.FC = () => {
   if (!hasMarginfiAccount) {
     return (
       <div className="space-y-6 vision-perspective">
-        {err && (
+        {(err || hookErr) && (
           <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-            {err}
+            {err || hookErr}
           </div>
         )}
-        {hookErr && (
-          <div className="vision-glass rounded-lg px-4 py-3 text-sm text-red-300 border-red-500/30">
-            {hookErr}
-          </div>
-        )}
+
         <div className="relative group">
           <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
             <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
             <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
@@ -460,7 +442,7 @@ const SavingsAccount: React.FC = () => {
                   setOpenModal(true);
                 }}
                 disabled={!ready || !authenticated || !walletAddress || loading}
-                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] disabled:opacity-50 flex-shrink-0"
+                className="group relative overflow-hidden vision-button inline-flex items-center justify-center gap-2 px-4 py-2 rounded-2xl bg-[rgb(182,255,62)] text-black font-semibold disabled:opacity-50"
               >
                 <span>{loading ? "Preparing…" : "Open an account"}</span>
               </button>
@@ -474,15 +456,16 @@ const SavingsAccount: React.FC = () => {
             onSubmit={onOpenAndDeposit}
             apyPct={apyPct}
             displayCurrency={displayCurrency}
-            fxRate={fxRate}
+            fxRate={fxRate} // USD -> display (preview uses local/fx)
           />
         )}
       </div>
     );
   }
 
-  // Show any actions hook errors too
-  const compositeErr = actionsErr || hookErr;
+  // Show any actions/provider/interest errors too
+  const compositeErr =
+    actionsErr || hookErr || savingsSlice.error || interestErr || null;
 
   // Account exists → show balance + actions
   return (
@@ -495,7 +478,7 @@ const SavingsAccount: React.FC = () => {
 
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
           <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
@@ -531,32 +514,66 @@ const SavingsAccount: React.FC = () => {
             </button>
           </div>
 
-          <div className="flex px-2  sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
+          {/* Amount row with interest directly under amount */}
+          <div className="flex px-2 sm:flex-row sm:items-end justify-between gap-2 mb-3 sm:mb-6">
             <div className="flex-1 min-w-0">
-              <div className="flex flex-col gap-3">
-                <div className="flex items-baseline justify-between gap-3">
-                  <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-1 min-w-0">
-                    {loading ? (
-                      <div className="flex items-center gap-3">
-                        <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
-                        <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
-                      </div>
-                    ) : (
-                      <>
-                        <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
-                          {formatFiatNarrow(fiatValue, displayCurrency)}
-                        </span>
-                        <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium sm:self-end sm:pb-1 lg:pb-2">
-                          {displayCurrency.toLowerCase()}
-                        </span>
-                      </>
-                    )}
-                  </div>
+              <div className="flex flex-col">
+                {/* Top row: balance + currency */}
+                <div className="flex items-baseline gap-2 sm:gap-3">
+                  {loading ? (
+                    <>
+                      <div className="h-8 w-24 sm:h-12 sm:w-32 bg-white/10 rounded-xl animate-pulse" />
+                      <div className="h-4 w-8 sm:h-6 sm:w-12 bg-white/5 rounded-lg animate-pulse" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-3xl sm:text-4xl lg:text-5xl xl:text-6xl font-black bg-gradient-to-br from-white via-white to-white/80 bg-clip-text text-transparent tracking-tight leading-none">
+                        {formatFiatNarrow(fiatValue, displayCurrency)}
+                      </span>
+                      <span className="text-sm sm:text-base lg:text-lg text-white/50 font-medium pb-0.5 sm:pb-1 lg:pb-2">
+                        {displayCurrency.toLowerCase()}
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {/* Interest sits just under balance */}
+                <div className="mt-0.5 sm:mt-1">
+                  {loading ? (
+                    <span className="inline-block h-3 w-20 bg-white/10 rounded animate-pulse" />
+                  ) : (
+                    <span
+                      className={[
+                        "text-[11px] sm:text-xs tracking-tight whitespace-nowrap",
+                        interestLoading
+                          ? "text-white/50"
+                          : (interestFiat ?? 0) > 0
+                          ? "text-[rgb(182,255,62)]/90"
+                          : "text-white/50",
+                      ].join(" ")}
+                      title="Interest earned since baseline"
+                    >
+                      interest earned{" "}
+                      {interestLoading
+                        ? "…"
+                        : (() => {
+                            const v = Number.isFinite(interestFiat)
+                              ? Math.max(0, interestFiat)
+                              : 0;
+                            const formatted = formatFiatNarrow(
+                              v,
+                              displayCurrency
+                            );
+                            return v > 0 ? `+${formatted}` : formatted;
+                          })()}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
 
-            <div className="">
+            {/* Right-side stats: APY */}
+            <div className="flex flex-col gap-2 sm:gap-3">
               <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm">
                 <div className="text-right">
                   <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
@@ -664,7 +681,7 @@ function AmountModal({
     displayCurrency === "USD"
       ? num
       : valid && Number.isFinite(fxRate) && fxRate > 0
-      ? num / fxRate
+      ? num / fxRate // local -> USD using USD->display rate
       : NaN;
 
   const submit = async () => {
@@ -798,7 +815,7 @@ function OpenAccountModal({
     displayCurrency === "USD"
       ? num
       : valid && Number.isFinite(fxRate) && fxRate > 0
-      ? num / fxRate
+      ? num / fxRate // local -> USD using USD->display rate
       : NaN;
 
   const submit = async () => {
