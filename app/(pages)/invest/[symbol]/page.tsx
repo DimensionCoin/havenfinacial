@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowLeft, RefreshCw } from "lucide-react";
@@ -89,12 +89,13 @@ type JupQuote = {
 
 /* -------------------------------- page ---------------------------------- */
 
-export default function TokenChartPage({
-  params,
-}: {
-  params: { symbol: string };
-}) {
-  const symbolParam = (params.symbol || "").toUpperCase();
+type TokenChartPageProps = {
+  params: Promise<{ symbol: string }>;
+};
+
+export default function TokenChartPage({ params }: TokenChartPageProps) {
+  const resolvedParams = use(params);
+  const symbolParam = (resolvedParams?.symbol || "").toUpperCase();
   const token = useMemo(() => findTokenBySymbol(symbolParam), [symbolParam]);
 
   if (!token) {
