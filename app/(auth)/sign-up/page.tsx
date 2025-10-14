@@ -31,11 +31,9 @@ export default function SignUpPage() {
         Array.isArray(user?.mfaMethods) && (user?.mfaMethods?.length ?? 0) > 0;
 
       if (!hasAnyMfa) {
-        // Force user to enroll (passkey or authenticator app) using Privy's modal
-        await showMfaEnrollmentModal();
+        await showMfaEnrollmentModal(); // passkey / authenticator app
       }
 
-      // Then require verification. Some SDK versions want init() first (no-op otherwise).
       try {
         // @ts-expect-error init may be optional depending on SDK version
         await initMfa();
@@ -43,10 +41,8 @@ export default function SignUpPage() {
         /* no-op */
       }
       await promptMfa();
-
-      return true; // MFA passed
+      return true;
     } catch {
-      // Any failure or cancel → clear auth and bounce to /sign-in
       try {
         await logout();
       } catch {}
@@ -56,11 +52,9 @@ export default function SignUpPage() {
   }
 
   async function finalize() {
-    // 1) Enforce MFA enrollment + verification first
     const ok = await requireMfaOrFail();
-    if (!ok) return; // user cancelled/failed MFA → already redirected
+    if (!ok) return;
 
-    // 2) Now create your app session and go to /onboarding (as requested)
     const tok = await getAccessToken();
     if (!tok) throw new Error("Missing Privy access token");
     await postSession(tok);
@@ -99,135 +93,167 @@ export default function SignUpPage() {
   if (!ready) return null;
 
   return (
-    <div className="min-h-screen flex items-center justify-center text-white px-4">
-      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold">Create your Haven account</h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Sign in with Google or continue with an email code. We’ll set up
-            your session and guide you through onboarding.
-          </p>
-        </header>
+    <main className="relative min-h-[100svh] bg-black/40 text-white overflow-hidden">
+      {/* Ambient background + subtle grid/vignette */}
+      <div className="pointer-events-none fixed inset-0 -z-10">
+        <div className="absolute inset-0 bg-[radial-gradient(50%_35%_at_80%_10%,rgba(182,255,62,0.10),transparent),radial-gradient(40%_30%_at_10%_80%,rgba(182,255,62,0.06),transparent)]" />
+        <div className="absolute inset-0 opacity-[0.04] [background:linear-gradient(rgba(255,255,255,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.2)_1px,transparent_1px)] [background-size:24px_24px]" />
+        <div className="absolute inset-0 bg-[radial-gradient(80%_60%_at_50%_30%,rgba(0,0,0,0),rgba(0,0,0,0.5))]" />
+      </div>
 
-        {/* Google */}
-        <button
-          onClick={() => {
-            setErr(null);
-            void initOAuth({ provider: "google" });
-          }}
-          disabled={isWorking}
-          className="w-full rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-60 border border-white/20 px-4 py-2 transition flex items-center justify-center gap-2"
-        >
-          {isOAuthLoading ? (
-            "Redirecting…"
-          ) : (
-            <>
-              <FcGoogle className="w-5 h-5" /> Continue With Google
-            </>
-          )}
-        </button>
+      <div className="pwa-top-offset flex items-center justify-center px-4 py-10">
+        <div className="w-full max-w-md">
+          {/* Brand header */}
+          <div className="mb-6 text-center">
+            <div className="inline-flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-[rgb(182,255,62)] animate-pulse" />
+              <span className="text-sm tracking-wide text-white/60">
+                Create your account
+              </span>
+            </div>
+            <h1 className="mt-3 text-2xl font-semibold tracking-tight">
+              Join <span className="text-[rgb(182,255,62)]">Haven</span>
+            </h1>
+            <p className="mt-1 text-sm text-white/60">
+              Start with Google or email. We’ll enroll & verify MFA to secure
+              your account.
+            </p>
+          </div>
 
-        <div className="relative flex items-center">
-          <div className="flex-1 h-px bg-white/10" />
-          <span className="px-3 text-xs text-white/50">or</span>
-          <div className="flex-1 h-px bg-white/10" />
-        </div>
+          {/* Glass card */}
+          <div className="relative rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl p-6 shadow-[0_10px_50px_rgba(0,0,0,0.45)]">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -inset-px rounded-3xl ring-1 ring-white/10"
+            />
 
-        {/* Email OTP */}
-        <div className="space-y-3">
-          <label className="block text-sm text-white/80">Email</label>
-          <input
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.currentTarget.value)}
-            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-white/20"
-            disabled={isWorking || isEmailAwaitingCode}
-          />
-
-          {isEmailAwaitingCode ? (
-            <>
-              <label className="block text-sm text-white/80">
-                Enter 6-digit code
-              </label>
-              <input
-                type="text"
-                inputMode="numeric"
-                placeholder="123456"
-                value={code}
-                onChange={(e) => setCode(e.currentTarget.value)}
-                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-white/20 tracking-widest"
-                maxLength={6}
-                disabled={isWorking}
-              />
-              <button
-                onClick={() => {
-                  setErr(null);
-                  void loginWithCode({ code: code.trim() });
-                }}
-                disabled={isWorking || code.trim().length < 4}
-                className="w-full rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-60 border border-white/20 px-4 py-2 transition"
-              >
-                {isEmailSubmitting ? "Verifying…" : "Create account"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void sendCode({ email: email.trim() })}
-                disabled={isWorking}
-                className="w-full text-xs text-white/60 hover:text-white/80 underline underline-offset-4"
-              >
-                Resend code
-              </button>
-            </>
-          ) : (
+            {/* Google */}
             <button
               onClick={() => {
                 setErr(null);
-                void sendCode({ email: email.trim() });
+                void initOAuth({ provider: "google" });
               }}
-              disabled={isWorking || !email.trim()}
-              className="w-full rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-60 border border-white/20 px-4 py-2 transition"
+              disabled={isWorking}
+              className="group w-full overflow-hidden rounded-xl border border-white/10 bg-white text-black px-4 py-3.5 transition hover:shadow-[0_10px_28px_rgba(255,255,255,0.1)] disabled:opacity-60 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
-              {isEmailSending ? "Sending…" : "Send code"}
+              {isOAuthLoading ? (
+                <span className="text-sm font-medium opacity-80">
+                  Redirecting…
+                </span>
+              ) : (
+                <>
+                  <FcGoogle className="h-5 w-5" />
+                  <span className="text-sm font-semibold tracking-tight">
+                    Continue with Google
+                  </span>
+                </>
+              )}
             </button>
-          )}
-        </div>
 
-        {/* Errors */}
-        <div
-          role="alert"
-          aria-live="polite"
-          className="min-h-[1.25rem] text-sm"
-        >
-          {(err || oauthErr || emailFlowErr) && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300">
-              {err || oauthErr || emailFlowErr}
+            {/* Divider */}
+            <div className="my-6 flex items-center gap-3">
+              <div className="h-px flex-1 bg-white/10" />
+              <span className="text-xs text-white/50">or</span>
+              <div className="h-px flex-1 bg-white/10" />
             </div>
-          )}
-        </div>
 
-        <footer className="space-y-4">
-          <div className="pt-4 border-t border-white/10">
-            <p className="text-sm text-zinc-400 text-center mb-3">
-              Already have an account?
-            </p>
-            <Link href="/sign-in">
-              <button className="w-full rounded-lg bg-[rgb(182,255,62)]/10 hover:bg-[rgb(182,255,62)]/20 border border-[rgb(182,255,62)]/30 px-4 py-2 text-[rgb(182,255,62)] transition-all duration-200 font-medium">
-                Sign In
-              </button>
-            </Link>
+            {/* Email + OTP */}
+            <div className="space-y-3">
+              <label className="block text-xs font-medium text-white/70">
+                Email
+              </label>
+              <input
+                type="email"
+                inputMode="email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.currentTarget.value)}
+                className="w-full rounded-xl bg-black/30 border border-white/10 px-3.5 py-3 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 placeholder:text-white/35 text-sm transition"
+                disabled={isWorking || isEmailAwaitingCode}
+              />
+
+              {isEmailAwaitingCode ? (
+                <>
+                  <label className="block text-xs font-medium text-white/70">
+                    Enter 6-digit code
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="123456"
+                    value={code}
+                    onChange={(e) => setCode(e.currentTarget.value)}
+                    maxLength={6}
+                    className="w-full rounded-xl bg-black/30 border border-white/10 px-3.5 py-3 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 tracking-[0.35em] placeholder:text-white/35 text-sm transition"
+                    disabled={isWorking}
+                  />
+                  <button
+                    onClick={() => {
+                      setErr(null);
+                      void loginWithCode({ code: code.trim() });
+                    }}
+                    disabled={isWorking || code.trim().length < 4}
+                    className="w-full rounded-xl bg-[rgb(182,255,62)] text-black px-4 py-3.5 font-semibold transition hover:bg-[rgb(182,255,62)]/90 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isEmailSubmitting ? "Verifying…" : "Create account"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void sendCode({ email: email.trim() })}
+                    disabled={isWorking}
+                    className="w-full text-xs text-white/60 hover:text-white/85 underline underline-offset-4"
+                  >
+                    Resend code
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => {
+                    setErr(null);
+                    void sendCode({ email: email.trim() });
+                  }}
+                  disabled={isWorking || !email.trim()}
+                  className="w-full rounded-xl bg-white/10 hover:bg-white/[0.16] border border-white/10 px-4 py-3.5 text-sm font-medium transition disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isEmailSending ? "Sending…" : "Send code"}
+                </button>
+              )}
+            </div>
+
+            {/* Errors */}
+            <div
+              role="alert"
+              aria-live="polite"
+              className="min-h-[1.25rem] mt-4 text-sm"
+            >
+              {(err || oauthErr || emailFlowErr) && (
+                <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300">
+                  {err || oauthErr || emailFlowErr}
+                </div>
+              )}
+            </div>
+
+            {/* Bottom line / links */}
+            <div className="mt-6 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+              <p className="text-xs text-white/60 text-center">
+                Already have an account?
+              </p>
+              <Link href="/sign-in" className="mt-2 block">
+                <button className="w-full rounded-xl bg-[rgb(182,255,62)]/12 hover:bg-[rgb(182,255,62)]/18 border border-[rgb(182,255,62)]/30 px-4 py-3 text-[rgb(182,255,62)] transition-all duration-200 font-medium">
+                  Sign in
+                </button>
+              </Link>
+            </div>
           </div>
-        </footer>
 
-        <footer className="space-y-2">
-          <p className="text-xs text-zinc-500">
+          {/* Footnote */}
+          <p className="mt-6 text-center text-[11px] text-white/45">
             By continuing, you agree to Haven’s Terms and acknowledge the
             Privacy Policy.
           </p>
-        </footer>
+        </div>
       </div>
-    </div>
+    </main>
   );
 }
