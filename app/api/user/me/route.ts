@@ -18,17 +18,17 @@ if (!APP_ID || !SECRET || !JWT_SECRET)
 
 const privy = new PrivyClient(APP_ID, SECRET);
 const enc = new TextEncoder();
-const SESSION_COOKIE = "__session";
 
-// Lean() docs return plain objects; add back _id type for TS
-type UserDocLean = IUser & { _id: unknown };
+// ❗ match the cookie you SET in /api/auth/session
+const SESSION_COOKIE = "haven_session";
 
-/** ---- Helpers ---- */
+// Added savingsBaselineUi?: unknown so we don't need `as any`
+type UserDocLean = IUser & { _id: unknown; savingsBaselineUi?: unknown };
+
 async function verifySessionCookie(token?: string) {
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, enc.encode(JWT_SECRET));
-    // we signed { uid, email, status, kycStatus }
     const rec = payload as Record<string, unknown>;
     const uid =
       (typeof rec.uid === "string" && rec.uid) ||
@@ -40,24 +40,29 @@ async function verifySessionCookie(token?: string) {
   }
 }
 
-/** ---- Route ---- */
 export async function GET(req: NextRequest) {
   try {
     await connect();
 
-    // Prefer Privy bearer (freshest), else app cookie
+    // Try Privy bearer FIRST, but don't fail if it’s missing/expired
     const auth = req.headers.get("authorization") || "";
     const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
 
     let userDoc: UserDocLean | null = null;
 
     if (bearer) {
-      const claims = await privy.verifyAuthToken(bearer);
-      const privyUserId = claims.userId;
-      userDoc = await User.findOne({
-        privyId: privyUserId,
-      }).lean<UserDocLean>();
-    } else {
+      try {
+        const claims = await privy.verifyAuthToken(bearer);
+        const privyUserId = claims.userId;
+        userDoc = await User.findOne({
+          privyId: privyUserId,
+        }).lean<UserDocLean>();
+      } catch {
+        // swallow bearer errors and fall through to cookie
+      }
+    }
+
+    if (!userDoc) {
       const cookieTok = req.cookies.get(SESSION_COOKIE)?.value;
       const uid = await verifySessionCookie(cookieTok);
       if (!uid) {
@@ -70,7 +75,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // Derived flags + safe shaping
     const hasDepositWallet = !!userDoc.depositWallet?.address;
     const hasMarginfiAccount = !!userDoc.marginfi?.accountPk;
 
@@ -81,12 +85,9 @@ export async function GET(req: NextRequest) {
         ? new Date(v).toISOString()
         : null;
 
-    // ✅ Pull baseline from Mongo (default 0 if missing/non-number)
-    type WithSavingsBaseline = { savingsBaselineUi?: unknown };
-    const rawBaseline = (userDoc as UserDocLean & WithSavingsBaseline)
-      .savingsBaselineUi;
-    const savingsBaselineUi =
-      typeof rawBaseline === "number" ? rawBaseline : 0;
+    // Removed `as any`; rely on the typed optional field
+    const rawBaseline = userDoc.savingsBaselineUi;
+    const savingsBaselineUi = typeof rawBaseline === "number" ? rawBaseline : 0;
 
     const payload = {
       id: String(userDoc._id),
@@ -103,28 +104,20 @@ export async function GET(req: NextRequest) {
         null,
       countryISO: userDoc.countryISO ?? null,
       displayCurrency: userDoc.displayCurrency ?? "USD",
-
-      status: userDoc.status, // "pending" | "active" | ...
-      kycStatus: userDoc.kycStatus, // "none" | "pending" | "approved" | "rejected"
-      riskLevel: userDoc.riskLevel, // "low" | "medium" | "high"
-
+      status: userDoc.status,
+      kycStatus: userDoc.kycStatus,
+      riskLevel: userDoc.riskLevel,
       features: {
         onramp: !!userDoc.features?.onramp,
         cards: !!userDoc.features?.cards,
         lend: !!userDoc.features?.lend,
       },
-
-      // single embedded wallet
       depositWallet: userDoc.depositWallet ?? null,
-
-      // token account caches
       tokenAccounts: {
         usdc2022: {
           depositAta: userDoc.tokenAccounts?.usdc2022?.depositAta || null,
         },
       },
-
-      // marginfi linkage + caches
       marginfi: {
         accountPk: userDoc.marginfi?.accountPk || null,
         usdcBankPk: userDoc.marginfi?.usdcBankPk || null,
@@ -136,8 +129,6 @@ export async function GET(req: NextRequest) {
           ? toIso(userDoc.marginfi.lastApyAt)
           : null,
       },
-
-      // optional product terms gate you kept
       savingsConsent: {
         enabled: !!userDoc.savingsConsent?.enabled,
         acceptedAt: userDoc.savingsConsent?.acceptedAt
@@ -145,16 +136,12 @@ export async function GET(req: NextRequest) {
           : null,
         version: userDoc.savingsConsent?.version ?? "",
       },
-
-      // ✅ Expose baseline in the public payload
       savingsBaselineUi,
-
       flags: {
         hasDepositWallet,
         hasMarginfiAccount,
         canOfframpFromDeposit: hasDepositWallet,
       },
-
       createdAt: userDoc.createdAt ? toIso(userDoc.createdAt) : null,
       updatedAt: userDoc.updatedAt ? toIso(userDoc.updatedAt) : null,
     };

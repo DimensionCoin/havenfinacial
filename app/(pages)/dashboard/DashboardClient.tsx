@@ -3,21 +3,19 @@
 import PendingEmailClaims from "@/components/shared/PendingEmailClaims";
 import nextDynamic from "next/dynamic";
 
-// Lightweight client-only skeletons shown while chunks load
 function HeroSkeleton() {
   return (
-    <div className="mb-4 rounded-2xl border border-white/10 bg-black/20 p-6 animate-pulse">
-      <div className="h-5 w-40 bg-white/10 rounded mb-3" />
-      <div className="h-8 w-64 bg-white/10 rounded" />
+    <div className="mb-2">
+      <div className="h-5 w-44 bg-white/10 rounded mb-2 animate-pulse" />
+      <div className="h-6 w-32 bg-white/10 rounded animate-pulse" />
     </div>
   );
 }
-function DepositSkeleton() {
+function CardSkeleton() {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-6 animate-pulse">
-      <div className="h-5 w-24 bg-white/10 rounded mb-4" />
-      <div className="h-9 w-56 bg-white/10 rounded mb-2" />
-      <div className="h-9 w-40 bg-white/10 rounded" />
+      <div className="h-4 w-24 bg-white/10 rounded mb-3" />
+      <div className="h-8 w-40 bg-white/10 rounded" />
     </div>
   );
 }
@@ -27,40 +25,43 @@ const Hero = nextDynamic(() => import("@/components/dash/Hero"), {
   loading: () => <HeroSkeleton />,
 });
 
+const AccountsCarousel = nextDynamic(
+  () => import("@/components/dash/AccountsCarousel"),
+  { ssr: false }
+);
+
 const DepositAccount = nextDynamic(
   () => import("@/components/dash/DepositAccount"),
-  {
-    ssr: false,
-    loading: () => <DepositSkeleton />,
-  }
+  { ssr: false, loading: () => <CardSkeleton /> }
 );
 
 const SavingsAccount = nextDynamic(
   () => import("@/components/dash/SavingsAccountCard"),
-  {
-    ssr: false,
-    loading: () => <DepositSkeleton />,
-  }
+  { ssr: false, loading: () => <CardSkeleton /> }
 );
 
 const InvestAccount = nextDynamic(
   () => import("@/components/dash/InvestAccount"),
-  {
-    ssr: false,
-    loading: () => <DepositSkeleton />,
-  }
+  { ssr: false, loading: () => <CardSkeleton /> }
 );
 
 export default function DashboardClient() {
   return (
-    <main className="py-3 px-4">
+    <main className="py-3 px-4 space-y-3">
+      <PendingEmailClaims />
       <Hero />
-      <div className="mt-2 space-y-8">
-        <PendingEmailClaims />
+
+      {/* Accounts (horizontal) */}
+      <AccountsCarousel title="Accounts">
         <DepositAccount />
         <SavingsAccount />
+      </AccountsCarousel>
+
+      {/* Invest below */}
+      <section className="space-y-2">
+        <h2 className="text-sm font-semibold text-white/80">Invest</h2>
         <InvestAccount />
-      </div>
+      </section>
     </main>
   );
 }

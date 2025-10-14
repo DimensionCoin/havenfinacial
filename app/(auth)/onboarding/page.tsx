@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePrivy } from "@privy-io/react-auth";
 
@@ -342,6 +342,12 @@ function isValidDob(yyyyMmDd: string) {
   return age >= 18;
 }
 
+// narrow helpers for API responses
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+type KycStatus = "none" | "pending" | "approved" | "rejected";
+
 export default function OnboardingPage() {
   const router = useRouter();
   const { ready, authenticated, getAccessToken, user } = usePrivy();
@@ -352,7 +358,7 @@ export default function OnboardingPage() {
   const [countryISO, setCountry] = useState("");
   const [displayCurrency, setCurrency] = useState("");
 
-  // Optional PII (used for instant approval)
+  // Optional PII
   const [line1, setLine1] = useState("");
   const [line2, setLine2] = useState("");
   const [city, setCity] = useState("");
@@ -365,11 +371,24 @@ export default function OnboardingPage() {
   const [tos, setTos] = useState(true);
   const [privacy, setPrivacy] = useState(true);
 
+  // NEW: risk profile (basic)
+  const [riskTolerance, setRiskTolerance] = useState<
+    "low" | "medium" | "high" | ""
+  >("");
+  const [experience, setExperience] = useState<
+    "beginner" | "intermediate" | "advanced" | ""
+  >("");
+  const [horizon, setHorizon] = useState<"short" | "medium" | "long" | "">("");
+
+  // UI state
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  // Prefill first/last if Privy provides a displayName
+  // NEW: step state
+  const [step, setStep] = useState<0 | 1 | 2 | 3>(0);
+
+  // Prefill first/last from Privy
   useEffect(() => {
     if (!user) return;
     const n = (() => {
@@ -397,7 +416,7 @@ export default function OnboardingPage() {
     if (cur) setCurrency(cur);
   }, [countryISO, displayCurrency]);
 
-  // UI helpers
+  // Helpers
   const cISO = countryISO.trim().toUpperCase();
   const hasNames = !!firstName.trim() && !!lastName.trim();
   const hasFullAddress =
@@ -423,23 +442,12 @@ export default function OnboardingPage() {
       fe.displayCurrency = "Use a valid 3-letter currency.";
     if (!tos) fe.tos = "You must accept the Terms.";
     if (!privacy) fe.privacy = "You must accept the Privacy Policy.";
-    // If DOB provided, enforce 18+
     if (dob && !isValidDob(dob)) fe.dob = "You must be at least 18 years old.";
     setFieldErrors(fe);
     return Object.keys(fe).length === 0;
   }, [firstName, lastName, cISO, currencyChoice, tos, privacy, dob]);
 
-  const isFormMinValid = useMemo(
-    () =>
-      hasNames &&
-      cISO.length === 2 &&
-      isISO2(cISO) &&
-      isISO3(currencyChoice) &&
-      tos &&
-      privacy,
-    [hasNames, cISO, currencyChoice, tos, privacy]
-  );
-
+  // Your existing submit (unchanged except it uses current state)
   const submit = useCallback(async () => {
     setErr(null);
     setFieldErrors({});
@@ -459,7 +467,8 @@ export default function OnboardingPage() {
         countryISO: string; // ISO-2
         displayCurrency?: string; // ISO-3
         phoneNumber?: string;
-        dob?: string; // YYYY-MM-DD
+        dob?: string;
+        risk?: { tolerance?: string; experience?: string; horizon?: string };
         address?: {
           line1: string;
           line2?: string;
@@ -477,9 +486,13 @@ export default function OnboardingPage() {
         countryISO: cISO,
         displayCurrency: currencyChoice,
         consents: { tos, privacy },
+        risk: {
+          tolerance: riskTolerance || undefined,
+          experience: experience || undefined,
+          horizon: horizon || undefined,
+        },
       };
 
-      // Only send optional PII if present (your API will instant-approve if full)
       if (hasFullAddress) {
         body.address = {
           line1: line1.trim(),
@@ -507,36 +520,27 @@ export default function OnboardingPage() {
       let data: unknown = {};
       try {
         data = text ? JSON.parse(text) : {};
-      } catch {
-        /* non-JSON error */
-      }
+      } catch {}
 
       if (!res.ok) {
-        // Map server-side errors to field or banner
-        const errMsg = (() => {
-          if (data && typeof data === "object" && "error" in data) {
-            const v = (data as Record<string, unknown>).error;
-            return typeof v === "string" ? v : null;
-          }
-          return null;
-        })();
+        // Extract error message safely
+        const errMsg =
+          isRecord(data) && typeof data.error === "string" ? data.error : null;
+
         if (res.status === 400 && errMsg) {
-          // try a few common messages from your API
           if (/countryISO/i.test(errMsg))
             setFieldErrors((p) => ({ ...p, countryISO: errMsg }));
           else if (/displayCurrency/i.test(errMsg))
             setFieldErrors((p) => ({ ...p, displayCurrency: errMsg }));
-          else if (/First and last/i.test(errMsg)) {
+          else if (/First and last/i.test(errMsg))
             setFieldErrors((p) => ({
               ...p,
               firstName: "Required",
               lastName: "Required",
             }));
-          } else if (/dob/i.test(errMsg)) {
+          else if (/dob/i.test(errMsg))
             setFieldErrors((p) => ({ ...p, dob: errMsg }));
-          } else {
-            setErr(errMsg);
-          }
+          else setErr(errMsg);
         } else if (res.status === 403) {
           setFieldErrors((p) => ({
             ...p,
@@ -545,28 +549,28 @@ export default function OnboardingPage() {
         } else if (res.status === 404) {
           setErr("User not found.");
         } else {
-          const genericMsg = (() => {
-            if (data && typeof data === "object" && "error" in data) {
-              const v = (data as Record<string, unknown>).error;
-              return typeof v === "string" ? v : null;
-            }
-            return null;
-          })();
+          const genericMsg =
+            isRecord(data) && typeof data.error === "string"
+              ? data.error
+              : null;
           setErr(genericMsg || text || "Onboarding failed");
         }
         return;
       }
 
-      const kycStatus: "none" | "pending" | "approved" | "rejected" | undefined =
-        (() => {
-          if (data && typeof data === "object" && "kycStatus" in data) {
-            const v = (data as Record<string, unknown>).kycStatus;
-            return v === "none" || v === "pending" || v === "approved" || v === "rejected"
-              ? v
-              : undefined;
-          }
-          return undefined;
-        })();
+      // Extract kycStatus safely
+      const rawKyc =
+        isRecord(data) && typeof data.kycStatus === "string"
+          ? (data.kycStatus as string)
+          : undefined;
+      const kycStatus: KycStatus | undefined =
+        rawKyc &&
+        (["none", "pending", "approved", "rejected"] as const).includes(
+          rawKyc as KycStatus
+        )
+          ? (rawKyc as KycStatus)
+          : undefined;
+
       if (kycStatus === "approved") router.replace("/dashboard");
       else router.replace("/kyc/pending");
     } catch (e) {
@@ -593,6 +597,9 @@ export default function OnboardingPage() {
     postalCode,
     dob,
     phoneNumber,
+    riskTolerance,
+    experience,
+    horizon,
     router,
   ]);
 
@@ -605,244 +612,515 @@ export default function OnboardingPage() {
     );
   }
 
+  // Step gating
+  const canNext =
+    (step === 0 &&
+      firstName.trim() &&
+      lastName.trim() &&
+      (!dob || isValidDob(dob))) ||
+    (step === 1 &&
+      cISO.length === 2 &&
+      isISO2(cISO) &&
+      isISO3(currencyChoice)) ||
+    (step === 2 && riskTolerance && experience && horizon) ||
+    (step === 3 && tos && privacy);
+
+  const goNext = () => setStep((s) => Math.min(3, s + 1) as 0 | 1 | 2 | 3);
+  const goPrev = () => setStep((s) => Math.max(0, s - 1) as 0 | 1 | 2 | 3);
+
+  // Little inline “clip art” icons (SVG)
+  const IconShield = () => (
+    <svg viewBox="0 0 24 24" className="h-10 w-10 text-[rgb(182,255,62)]">
+      <path
+        fill="currentColor"
+        d="M12 2l7 3v6c0 5-3.4 9.7-7 11-3.6-1.3-7-6-7-11V5l7-3z"
+      />
+    </svg>
+  );
+  const IconId = () => (
+    <svg viewBox="0 0 24 24" className="h-10 w-10 text-[rgb(182,255,62)]">
+      <rect x="3" y="5" width="18" height="14" rx="2" fill="currentColor" />
+      <circle cx="9" cy="12" r="2.5" fill="black" />
+      <rect x="13" y="10" width="6" height="2" fill="black" />
+      <rect x="13" y="13.5" width="6" height="2" fill="black" />
+    </svg>
+  );
+  const IconHome = () => (
+    <svg viewBox="0 0 24 24" className="h-10 w-10 text-[rgb(182,255,62)]">
+      <path fill="currentColor" d="M12 3l9 8h-3v9h-5v-6H11v6H6v-9H3l9-8z" />
+    </svg>
+  );
+  const IconChart = () => (
+    <svg viewBox="0 0 24 24" className="h-10 w-10 text-[rgb(182,255,62)]">
+      <rect x="3" y="10" width="4" height="11" fill="currentColor" />
+      <rect x="10" y="6" width="4" height="15" fill="currentColor" />
+      <rect x="17" y="2" width="4" height="19" fill="currentColor" />
+    </svg>
+  );
+
   return (
-    <div className="min-h-screen text-white px-4 py-10">
-      <div className="max-w-2xl mx-auto rounded-2xl border border-white/10 bg-white/5 p-6 shadow-2xl space-y-6">
-        <header>
-          <h1 className="text-2xl font-semibold">
-            Finish setting up your account
-          </h1>
-          <p className="mt-1 text-sm text-zinc-400">
-            Provide name, full address, and date of birth for instant approval.
-          </p>
-          <div
-            className={`mt-3 text-xs rounded-lg px-3 py-2 border ${
-              autoApproveReady
-                ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
-                : "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
-            }`}
-          >
-            {autoApproveReady
-              ? "Eligible for instant approval"
-              : "Add full address + DOB to be instantly approved"}
-          </div>
-        </header>
-
-        {/* Basic profile */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm mb-1">First name</label>
-            <input
-              value={firstName}
-              onChange={(e) => setFirst(e.target.value)}
-              autoCapitalize="words"
-              className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.firstName ? "border-red-500/50" : "border-white/10"
-              }`}
-            />
-            {fieldErrors.firstName && (
-              <p className="text-xs text-red-300 mt-1">
-                {fieldErrors.firstName}
-              </p>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Last name</label>
-            <input
-              value={lastName}
-              onChange={(e) => setLast(e.target.value)}
-              autoCapitalize="words"
-              className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.lastName ? "border-red-500/50" : "border-white/10"
-              }`}
-            />
-            {fieldErrors.lastName && (
-              <p className="text-xs text-red-300 mt-1">
-                {fieldErrors.lastName}
-              </p>
-            )}
-          </div>
-
-          {/* Country dropdown */}
-          <div>
-            <label className="block text-sm mb-1">Country</label>
-            <select
-              value={countryISO}
-              onChange={(e) => setCountry(e.target.value)}
-              className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 uppercase ${
-                fieldErrors.countryISO ? "border-red-500/50" : "border-white/10"
-              }`}
-            >
-              <option value="">Select your country</option>
-              {COUNTRIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.name} ({c.code})
-                </option>
-              ))}
-            </select>
-            {fieldErrors.countryISO && (
-              <p className="text-xs text-red-300 mt-1">
-                {fieldErrors.countryISO}
-              </p>
-            )}
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Display currency</label>
-            <select
-              value={displayCurrency}
-              onChange={(e) => setCurrency(e.target.value)}
-              className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.displayCurrency
-                  ? "border-red-500/50"
-                  : "border-white/10"
-              }`}
-            >
-              <option value="">
-                {countryToCurrency[cISO]
-                  ? `Auto (${countryToCurrency[cISO]})`
-                  : "Auto from country"}
-              </option>
-              {CURRENCIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-            <p className="mt-1 text-xs text-zinc-500">
-              We’ll suggest a currency from your country. You can change it.
-            </p>
-            {fieldErrors.displayCurrency && (
-              <p className="text-xs text-red-300 mt-1">
-                {fieldErrors.displayCurrency}
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* Address */}
-        <div className="space-y-3">
-          <h2 className="font-medium">Address</h2>
-          <input
-            placeholder="Address line 1"
-            value={line1}
-            onChange={(e) => setLine1(e.target.value)}
-            className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-              fieldErrors.line1 ? "border-red-500/50" : "border-white/10"
-            }`}
-          />
-          <input
-            placeholder="Address line 2 (optional)"
-            value={line2}
-            onChange={(e) => setLine2(e.target.value)}
-            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-white/20"
-          />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <input
-              placeholder="City"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              className={`rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.city ? "border-red-500/50" : "border-white/10"
-              }`}
-            />
-            <input
-              placeholder="State / Province"
-              value={stateOrProvince}
-              onChange={(e) => setState(e.target.value)}
-              className={`rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.stateOrProvince
-                  ? "border-red-500/50"
-                  : "border-white/10"
-              }`}
-            />
-            <input
-              placeholder="Postal code"
-              value={postalCode}
-              onChange={(e) => setPostal(e.target.value)}
-              className={`rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.postalCode ? "border-red-500/50" : "border-white/10"
-              }`}
-            />
-          </div>
-          {/* Info text */}
-          <p className="text-xs text-zinc-500">
-            Address is optional, but providing it with your date of birth may
-            qualify you for instant approval.
-          </p>
-        </div>
-
-        {/* DOB + Phone */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm mb-1">Date of birth</label>
-            <input
-              type="date"
-              value={dob}
-              max={todayISO()}
-              onChange={(e) => setDob(e.target.value)}
-              className={`w-full rounded-lg bg-black/20 border px-3 py-2 outline-none focus:ring-2 ring-white/20 ${
-                fieldErrors.dob ? "border-red-500/50" : "border-white/10"
-              }`}
-            />
-            {fieldErrors.dob && (
-              <p className="text-xs text-red-300 mt-1">{fieldErrors.dob}</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-sm mb-1">Phone (optional)</label>
-            <input
-              placeholder="+1 555 123 4567"
-              value={phoneNumber}
-              onChange={(e) => setPhone(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-white/20"
-            />
-          </div>
-        </div>
-
-        {/* Consents */}
-        <div className="space-y-2">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={tos}
-              onChange={(e) => setTos(e.target.checked)}
-            />
-            <span>I agree to the Terms of Service</span>
-          </label>
-          {fieldErrors.tos && (
-            <p className="text-xs text-red-300">{fieldErrors.tos}</p>
-          )}
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={privacy}
-              onChange={(e) => setPrivacy(e.target.checked)}
-            />
-            <span>I agree to the Privacy Policy</span>
-          </label>
-          {fieldErrors.privacy && (
-            <p className="text-xs text-red-300">{fieldErrors.privacy}</p>
-          )}
-        </div>
-
-        {/* Error banner */}
-        <div className="min-h-[1.25rem] text-sm">
-          {err && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300">
-              {err}
-            </div>
-          )}
-        </div>
-
-        <button
-          onClick={submit}
-          disabled={busy || !isFormMinValid}
-          className="w-full rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-60 border border-white/20 px-4 py-2 transition"
-        >
-          {busy ? "Saving…" : "Continue"}
-        </button>
+    <main className="relative min-h-[100svh] bg-black/60 text-white overflow-hidden ">
+      {/* Ambient background */}
+      <div className="fixed inset-0 -z-10">
+        <div className="absolute inset-0 bg-[radial-gradient(60%_40%_at_80%_10%,rgba(182,255,62,0.08),transparent),radial-gradient(40%_30%_at_10%_80%,rgba(182,255,62,0.06),transparent)]" />
+        <div className="absolute inset-0 opacity-[0.05] [background:linear-gradient(rgba(255,255,255,0.15)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.15)_1px,transparent_1px)] [background-size:28px_28px]" />
       </div>
-    </div>
+
+      <div className="pwa-top-offset px-4 py-10 mt-4">
+        <div className="mx-auto w-full max-w-2xl">
+          {/* Header */}
+          <header className="mb-6 text-center">
+            <div className="inline-flex items-center gap-2 rounded-full border border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/10 px-3 py-1 text-xs text-[rgb(182,255,62)]">
+              <IconShield />
+              <span className="font-medium">Bank-grade protection</span>
+            </div>
+            <h1 className="mt-4 text-2xl font-semibold tracking-tight">
+              Finish setting up your account
+            </h1>
+            <p className="mt-1 text-sm text-white/60">
+              A few quick steps to secure your Haven and personalize your
+              experience.
+            </p>
+          </header>
+
+          {/* Progress */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between text-xs text-white/60">
+              {["You", "Address", "Risk", "Review"].map((label, i) => (
+                <div key={label} className="flex-1 flex items-center">
+                  <div
+                    className={`h-8 min-w-[2rem] px-2 rounded-full flex items-center justify-center border ${
+                      step >= i
+                        ? "border-[rgb(182,255,62)]/50 bg-[rgb(182,255,62)]/15 text-white"
+                        : "border-white/10 bg-white/[0.04] text-white/60"
+                    }`}
+                  >
+                    {i + 1}
+                  </div>
+                  {i < 3 && (
+                    <div
+                      className={`mx-2 h-px flex-1 ${
+                        step > i ? "bg-[rgb(182,255,62)]/60" : "bg-white/10"
+                      }`}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Card */}
+          <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl shadow-[0_10px_50px_rgba(0,0,0,0.45)]">
+            {/* subtle ring */}
+            <div
+              aria-hidden
+              className="pointer-events-none absolute -inset-px rounded-[1.5rem] ring-1 ring-white/10"
+            />
+
+            <div className="p-6 md:p-8 space-y-6">
+              {/* Step title + icon */}
+              <div className="flex items-center gap-3">
+                {step === 0 && <IconId />}
+                {step === 1 && <IconHome />}
+                {step === 2 && <IconChart />}
+                {step === 3 && <IconShield />}
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    {step === 0 && "Personal details"}
+                    {step === 1 && "Address & currency"}
+                    {step === 2 && "Your risk profile"}
+                    {step === 3 && "Review & consents"}
+                  </h2>
+                  <p className="text-xs text-white/60">
+                    {step === 0 &&
+                      "Tell us who you are to personalize your account."}
+                    {step === 1 &&
+                      "This helps us suggest local currency and verify eligibility."}
+                    {step === 2 &&
+                      "We use this to tune product tips—never to limit you."}
+                    {step === 3 && "Confirm details and accept to continue."}
+                  </p>
+                </div>
+              </div>
+
+              {/* STEP CONTENTS */}
+              {step === 0 && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm mb-1">First name</label>
+                    <input
+                      value={firstName}
+                      onChange={(e) => setFirst(e.target.value)}
+                      className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                        fieldErrors.firstName
+                          ? "border-red-500/50"
+                          : "border-white/10"
+                      }`}
+                    />
+                    {fieldErrors.firstName && (
+                      <p className="text-xs text-red-300 mt-1">
+                        {fieldErrors.firstName}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1">Last name</label>
+                    <input
+                      value={lastName}
+                      onChange={(e) => setLast(e.target.value)}
+                      className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                        fieldErrors.lastName
+                          ? "border-red-500/50"
+                          : "border-white/10"
+                      }`}
+                    />
+                    {fieldErrors.lastName && (
+                      <p className="text-xs text-red-300 mt-1">
+                        {fieldErrors.lastName}
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm mb-1">Date of birth</label>
+                    <input
+                      type="date"
+                      value={dob}
+                      max={todayISO()}
+                      onChange={(e) => setDob(e.target.value)}
+                      className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                        fieldErrors.dob
+                          ? "border-red-500/50"
+                          : "border-white/10"
+                      }`}
+                    />
+                    {fieldErrors.dob && (
+                      <p className="text-xs text-red-300 mt-1">
+                        {fieldErrors.dob}
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-sm mb-1">
+                      Phone (optional)
+                    </label>
+                    <input
+                      placeholder="+1 555 123 4567"
+                      value={phoneNumber}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {step === 1 && (
+                <div className="space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm mb-1">Country</label>
+                      <select
+                        value={countryISO}
+                        onChange={(e) => setCountry(e.target.value)}
+                        className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 uppercase ${
+                          fieldErrors.countryISO
+                            ? "border-red-500/50"
+                            : "border-white/10"
+                        }`}
+                      >
+                        <option value="">Select your country</option>
+                        {COUNTRIES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.name} ({c.code})
+                          </option>
+                        ))}
+                      </select>
+                      {fieldErrors.countryISO && (
+                        <p className="text-xs text-red-300 mt-1">
+                          {fieldErrors.countryISO}
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-sm mb-1">
+                        Display currency
+                      </label>
+                      <select
+                        value={displayCurrency}
+                        onChange={(e) => setCurrency(e.target.value)}
+                        className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                          fieldErrors.displayCurrency
+                            ? "border-red-500/50"
+                            : "border-white/10"
+                        }`}
+                      >
+                        <option value="">
+                          {countryToCurrency[cISO]
+                            ? `Auto (${countryToCurrency[cISO]})`
+                            : "Auto from country"}
+                        </option>
+                        {CURRENCIES.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-xs text-white/50">
+                        We’ll suggest a currency from your country. You can
+                        change it.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h3 className="text-sm font-medium">Address</h3>
+                    <input
+                      placeholder="Address line 1"
+                      value={line1}
+                      onChange={(e) => setLine1(e.target.value)}
+                      className={`w-full rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                        fieldErrors.line1
+                          ? "border-red-500/50"
+                          : "border-white/10"
+                      }`}
+                    />
+                    <input
+                      placeholder="Address line 2 (optional)"
+                      value={line2}
+                      onChange={(e) => setLine2(e.target.value)}
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30"
+                    />
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <input
+                        placeholder="City"
+                        value={city}
+                        onChange={(e) => setCity(e.target.value)}
+                        className={`rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                          fieldErrors.city
+                            ? "border-red-500/50"
+                            : "border-white/10"
+                        }`}
+                      />
+                      <input
+                        placeholder="State / Province"
+                        value={stateOrProvince}
+                        onChange={(e) => setState(e.target.value)}
+                        className={`rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                          fieldErrors.stateOrProvince
+                            ? "border-red-500/50"
+                            : "border-white/10"
+                        }`}
+                      />
+                      <input
+                        placeholder="Postal code"
+                        value={postalCode}
+                        onChange={(e) => setPostal(e.target.value)}
+                        className={`rounded-xl bg-black/30 border px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30 ${
+                          fieldErrors.postalCode
+                            ? "border-red-500/50"
+                            : "border-white/10"
+                        }`}
+                      />
+                    </div>
+                    <p className="text-xs text-white/50">
+                      Providing full address with your date of birth may qualify
+                      you for instant approval.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <label className="block text-sm">Risk tolerance</label>
+                    <select
+                      value={riskTolerance}
+                      onChange={(e) =>
+                        setRiskTolerance(
+                          e.target.value as "low" | "medium" | "high" | ""
+                        )
+                      }
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30"
+                    >
+                      <option value="">Choose…</option>
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-sm">Experience</label>
+                    <select
+                      value={experience}
+                      onChange={(e) =>
+                        setExperience(
+                          e.target.value as
+                            | "beginner"
+                            | "intermediate"
+                            | "advanced"
+                            | ""
+                        )
+                      }
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30"
+                    >
+                      <option value="">Choose…</option>
+                      <option value="beginner">Beginner</option>
+                      <option value="intermediate">Intermediate</option>
+                      <option value="advanced">Advanced</option>
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-sm">Time horizon</label>
+                    <select
+                      value={horizon}
+                      onChange={(e) =>
+                        setHorizon(
+                          e.target.value as "short" | "medium" | "long" | ""
+                        )
+                      }
+                      className="w-full rounded-xl bg-black/30 border border-white/10 px-3 py-2 outline-none focus:ring-2 ring-[rgb(182,255,62)]/30"
+                    >
+                      <option value="">Choose…</option>
+                      <option value="short">0–1 years</option>
+                      <option value="medium">1–3 years</option>
+                      <option value="long">3+ years</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-3 rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/70">
+                    We use these answers to tailor education and defaults. They
+                    do not restrict how you use Haven.
+                  </div>
+                </div>
+              )}
+
+              {step === 3 && (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-sm">
+                    <div className="flex flex-wrap gap-3 text-white/80">
+                      <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                        {firstName || "—"} {lastName || ""}
+                      </span>
+                      <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                        {cISO || "—"} • {currencyChoice || "—"}
+                      </span>
+                      {line1 && (
+                        <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                          {line1}
+                        </span>
+                      )}
+                      {city && (
+                        <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                          {city}
+                        </span>
+                      )}
+                      {stateOrProvince && (
+                        <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                          {stateOrProvince}
+                        </span>
+                      )}
+                      {postalCode && (
+                        <span className="px-2 py-1 rounded-lg bg-black/30 border border-white/10">
+                          {postalCode}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={tos}
+                        onChange={(e) => setTos(e.target.checked)}
+                      />
+                      <span>I agree to the Terms of Service</span>
+                    </label>
+                    {fieldErrors.tos && (
+                      <p className="text-xs text-red-300">{fieldErrors.tos}</p>
+                    )}
+                    <label className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={privacy}
+                        onChange={(e) => setPrivacy(e.target.checked)}
+                      />
+                      <span>I agree to the Privacy Policy</span>
+                    </label>
+                    {fieldErrors.privacy && (
+                      <p className="text-xs text-red-300">
+                        {fieldErrors.privacy}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Instant approval badge */}
+                  <div
+                    className={`text-xs rounded-lg px-3 py-2 border ${
+                      autoApproveReady
+                        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                        : "border-yellow-400/30 bg-yellow-400/10 text-yellow-300"
+                    }`}
+                  >
+                    {autoApproveReady
+                      ? "Eligible for instant approval"
+                      : "Add full address + DOB to be instantly approved"}
+                  </div>
+                </div>
+              )}
+
+              {/* Errors */}
+              <div
+                role="alert"
+                aria-live="polite"
+                className="min-h-[1.25rem] text-sm"
+              >
+                {err && (
+                  <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300">
+                    {err}
+                  </div>
+                )}
+              </div>
+
+              {/* Nav buttons */}
+              <div className="flex items-center justify-between pt-2">
+                <button
+                  onClick={goPrev}
+                  disabled={step === 0 || busy}
+                  className="rounded-xl px-4 py-2 text-sm border border-white/10 bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50"
+                >
+                  Back
+                </button>
+
+                {step < 3 ? (
+                  <button
+                    onClick={goNext}
+                    disabled={!canNext || busy}
+                    className="rounded-xl px-5 py-2 text-sm font-semibold bg-[rgb(182,255,62)] text-black hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50"
+                  >
+                    Continue
+                  </button>
+                ) : (
+                  <button
+                    onClick={submit}
+                    disabled={busy || !tos || !privacy}
+                    className="rounded-xl px-5 py-2 text-sm font-semibold bg-[rgb(182,255,62)] text-black hover:bg-[rgb(182,255,62)]/90 disabled:opacity-50"
+                  >
+                    {busy ? "Saving…" : "Finish & continue"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Tiny reassurance footer */}
+          <p className="mt-6 text-center text-[11px] text-white/45">
+            Your info is encrypted in transit and at rest. You control your
+            data.
+          </p>
+        </div>
+      </div>
+    </main>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   usePrivy,
@@ -23,42 +23,79 @@ export default function SignUpPage() {
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
-  // Require MFA enrollment (if none) + verification via Privy UIs.
-  // On failure/cancel, logout and redirect to /sign-in.
-  async function requireMfaOrFail(): Promise<boolean> {
+  const finalizingRef = useRef(false);
+
+  async function maybeRunMfa(): Promise<boolean> {
     try {
       const hasAnyMfa =
         Array.isArray(user?.mfaMethods) && (user?.mfaMethods?.length ?? 0) > 0;
 
       if (!hasAnyMfa) {
-        await showMfaEnrollmentModal(); // passkey / authenticator app
+        // Enroll (passkey / authenticator) if they have none
+        await showMfaEnrollmentModal();
       }
 
+      // Some SDK versions need init; it's a no-op otherwise
       try {
-        // @ts-expect-error init may be optional depending on SDK version
+        // @ts-expect-error optional on some versions
         await initMfa();
-      } catch {
-        /* no-op */
-      }
-      await promptMfa();
+      } catch {}
+
+      await promptMfa(); // throws on cancel / wrong code / lockout
       return true;
     } catch {
-      try {
-        await logout();
-      } catch {}
-      router.replace("/sign-in");
       return false;
     }
   }
 
-  async function finalize() {
-    const ok = await requireMfaOrFail();
-    if (!ok) return;
-
-    const tok = await getAccessToken();
+  // Try to create the app session. If backend needs MFA, do MFA once and retry.
+  async function ensureAppSession(): Promise<boolean> {
+    let tok = await getAccessToken();
     if (!tok) throw new Error("Missing Privy access token");
-    await postSession(tok);
-    router.replace("/onboarding");
+
+    try {
+      await postSession(tok); // your existing server session creation
+      return true; // no MFA needed
+    } catch {
+      // Server likely enforced MFA. Try MFA once, then retry postSession.
+      const mfaOk = await maybeRunMfa();
+      if (!mfaOk) return false;
+
+      tok = await getAccessToken();
+      if (!tok) throw new Error("Missing token after MFA");
+      await postSession(tok); // retry after successful MFA
+      return true;
+    }
+  }
+
+  async function finalize() {
+    if (finalizingRef.current) return;
+    finalizingRef.current = true;
+    setErr(null);
+
+    try {
+      const ok = await ensureAppSession();
+      if (!ok) {
+        // MFA failed/cancelled → log out and send to sign-in
+        try {
+          await logout();
+        } catch {}
+        router.replace("/sign-in");
+        return;
+      }
+
+      // Good to go
+      router.replace("/onboarding");
+    } catch (e) {
+      // Any unexpected failure: clean up and show a safe error
+      try {
+        await logout();
+      } catch {}
+      setErr(e instanceof Error ? e.message : String(e));
+      router.replace("/sign-in");
+    } finally {
+      finalizingRef.current = false;
+    }
   }
 
   const { initOAuth, state: oauthState } = useLoginWithOAuth({
@@ -81,20 +118,11 @@ export default function SignUpPage() {
   const isOAuthLoading = oauthState.status === "loading";
   const isWorking = isOAuthLoading || isEmailSending || isEmailSubmitting;
 
-  const oauthErr =
-    oauthState.status === "error"
-      ? oauthState.error?.message ?? "OAuth failed"
-      : null;
-  const emailFlowErr =
-    emailState.status === "error"
-      ? emailState.error?.message ?? "Email login failed"
-      : null;
-
   if (!ready) return null;
 
   return (
     <main className="relative min-h-[100svh] bg-black/40 text-white overflow-hidden">
-      {/* Ambient background + subtle grid/vignette */}
+      {/* Ambient background */}
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute inset-0 bg-[radial-gradient(50%_35%_at_80%_10%,rgba(182,255,62,0.10),transparent),radial-gradient(40%_30%_at_10%_80%,rgba(182,255,62,0.06),transparent)]" />
         <div className="absolute inset-0 opacity-[0.04] [background:linear-gradient(rgba(255,255,255,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.2)_1px,transparent_1px)] [background-size:24px_24px]" />
@@ -103,7 +131,7 @@ export default function SignUpPage() {
 
       <div className="pwa-top-offset flex items-center justify-center px-4 py-10">
         <div className="w-full max-w-md">
-          {/* Brand header */}
+          {/* Header */}
           <div className="mb-6 text-center">
             <div className="inline-flex items-center gap-2">
               <div className="h-2 w-2 rounded-full bg-[rgb(182,255,62)] animate-pulse" />
@@ -115,12 +143,12 @@ export default function SignUpPage() {
               Join <span className="text-[rgb(182,255,62)]">Haven</span>
             </h1>
             <p className="mt-1 text-sm text-white/60">
-              Start with Google or email. We’ll enroll & verify MFA to secure
-              your account.
+              Start with Google or email. We’ll verify MFA if your account
+              requires it.
             </p>
           </div>
 
-          {/* Glass card */}
+          {/* Card */}
           <div className="relative rounded-3xl border border-white/10 bg-white/[0.04] backdrop-blur-xl p-6 shadow-[0_10px_50px_rgba(0,0,0,0.45)]">
             <div
               aria-hidden
@@ -227,9 +255,9 @@ export default function SignUpPage() {
               aria-live="polite"
               className="min-h-[1.25rem] mt-4 text-sm"
             >
-              {(err || oauthErr || emailFlowErr) && (
+              {err && (
                 <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-red-300">
-                  {err || oauthErr || emailFlowErr}
+                  {err}
                 </div>
               )}
             </div>

@@ -65,7 +65,6 @@ export default function Header() {
   const isAuthed = !!user && !loading;
   const firstName = (user?.firstName || "").trim();
   const email = user?.email || "";
-  const displayName = firstName || email || "User";
   const avatarInitial = (firstName || email || "U").charAt(0).toUpperCase();
   const homeHref = isAuthed ? "/dashboard" : "/";
 
@@ -105,14 +104,14 @@ export default function Header() {
                 <div>
                   {isAuthed ? (
                     <>
-                      <p className="text-xs text-muted-foreground">Hello,</p>
+                      <p className="text-xs text-muted-foreground">Welcome to,</p>
                       <p className="font-semibold text-foreground">
-                        {displayName}
+                        Haven
                       </p>
                     </>
                   ) : (
                     <span className="font-semibold text-foreground">
-                      Haven Bank
+                      Haven Vaults
                     </span>
                   )}
                 </div>

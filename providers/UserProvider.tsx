@@ -133,7 +133,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       if (!isPublicPath(pathname)) {
         const ok = data.status === "active" && data.kycStatus === "approved";
         if (!ok && pathname !== "/onboarding" && pathname !== "/kyc/pending") {
-          router.replace("/kyc/pending");
+          router.replace("/onboarding");
         }
       }
     } catch (e) {
