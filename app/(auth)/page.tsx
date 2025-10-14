@@ -153,8 +153,8 @@ export default function Landing() {
               </div>
 
               {/* Dark overlays ABOVE tiles for text contrast */}
-              <div className="absolute inset-0 z-10 rounded-[3rem] bg-black/25 md:bg-black/30 mix-blend-normal" />
-              <div className="absolute inset-0 z-10 rounded-[3rem] bg-gradient-to-b from-black/60 via-transparent to-black/70" />
+              <div className="absolute inset-0 z-10 rounded-[3rem] bg-black/10 md:bg-black/20 mix-blend-normal" />
+              <div className="absolute inset-0 z-10 rounded-[3rem] bg-gradient-to-b from-black/5 via-transparent to-black/10" />
             </div>
           </div>
 
