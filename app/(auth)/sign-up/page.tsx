@@ -6,6 +6,8 @@ import {
   usePrivy,
   useLoginWithEmail,
   useLoginWithOAuth,
+  useMfa,
+  useMfaEnrollment,
 } from "@privy-io/react-auth";
 import { FcGoogle } from "react-icons/fc";
 import Link from "next/link";
@@ -13,17 +15,56 @@ import { postSession } from "@/lib/postSession";
 
 export default function SignUpPage() {
   const router = useRouter();
-  const { getAccessToken, ready } = usePrivy();
+  const { user, getAccessToken, ready, logout } = usePrivy();
+  const { promptMfa, init: initMfa } = useMfa();
+  const { showMfaEnrollmentModal } = useMfaEnrollment();
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
+  // Require MFA enrollment (if none) + verification via Privy UIs.
+  // On failure/cancel, logout and redirect to /sign-in.
+  async function requireMfaOrFail(): Promise<boolean> {
+    try {
+      const hasAnyMfa =
+        Array.isArray(user?.mfaMethods) && (user?.mfaMethods?.length ?? 0) > 0;
+
+      if (!hasAnyMfa) {
+        // Force user to enroll (passkey or authenticator app) using Privy's modal
+        await showMfaEnrollmentModal();
+      }
+
+      // Then require verification. Some SDK versions want init() first (no-op otherwise).
+      try {
+        // @ts-expect-error init may be optional depending on SDK version
+        await initMfa();
+      } catch {
+        /* no-op */
+      }
+      await promptMfa();
+
+      return true; // MFA passed
+    } catch {
+      // Any failure or cancel → clear auth and bounce to /sign-in
+      try {
+        await logout();
+      } catch {}
+      router.replace("/sign-in");
+      return false;
+    }
+  }
+
   async function finalize() {
+    // 1) Enforce MFA enrollment + verification first
+    const ok = await requireMfaOrFail();
+    if (!ok) return; // user cancelled/failed MFA → already redirected
+
+    // 2) Now create your app session and go to /onboarding (as requested)
     const tok = await getAccessToken();
     if (!tok) throw new Error("Missing Privy access token");
-    const { goTo } = await postSession(tok);
-    router.replace(goTo); // server returns "/onboarding" for new accounts
+    await postSession(tok);
+    router.replace("/onboarding");
   }
 
   const { initOAuth, state: oauthState } = useLoginWithOAuth({
@@ -48,11 +89,11 @@ export default function SignUpPage() {
 
   const oauthErr =
     oauthState.status === "error"
-      ? (oauthState.error?.message ?? "OAuth failed")
+      ? oauthState.error?.message ?? "OAuth failed"
       : null;
   const emailFlowErr =
     emailState.status === "error"
-      ? (emailState.error?.message ?? "Email login failed")
+      ? emailState.error?.message ?? "Email login failed"
       : null;
 
   if (!ready) return null;
@@ -185,7 +226,6 @@ export default function SignUpPage() {
             By continuing, you agree to Haven’s Terms and acknowledge the
             Privacy Policy.
           </p>
-          
         </footer>
       </div>
     </div>

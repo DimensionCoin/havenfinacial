@@ -1,44 +1,135 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   usePrivy,
   useLoginWithEmail,
   useLoginWithOAuth,
+  useMfa,
+  useMfaEnrollment,
 } from "@privy-io/react-auth";
 import { FcGoogle } from "react-icons/fc";
 import Link from "next/link";
 import { postSession } from "@/lib/postSession";
 
+/**
+ * Shows Privy’s enrollment + verification UIs (not custom UIs).
+ * Flow:
+ *  1) If user has no MFA methods yet → open Privy’s enrollment modal
+ *  2) Open Privy’s verification modal (promptMfa)
+ *  3) On success → get token, create server session, go to /dashboard
+ *  4) On failure/cancel → logout, go back to /sign-in with message
+ */
+function PrivyMfaGate({
+  onSuccess,
+  onFail,
+}: {
+  onSuccess: () => void;
+  onFail: (message?: string) => void;
+}) {
+  const router = useRouter();
+  const { user, getAccessToken, logout } = usePrivy();
+  const { showMfaEnrollmentModal } = useMfaEnrollment();
+  const { promptMfa, init: initMfa } = useMfa();
+
+  useEffect(() => {
+    let mounted = true;
+
+    (async () => {
+      try {
+        // 1) Enroll if needed (Privy default UI)
+        const hasAnyMfa =
+          Array.isArray(user?.mfaMethods) &&
+          (user?.mfaMethods?.length ?? 0) > 0;
+        if (!hasAnyMfa) {
+          await showMfaEnrollmentModal();
+        }
+
+        // 2) Verify (Privy default UI)
+        try {
+          // @ts-expect-error init may be optional depending on SDK version
+          await initMfa();
+        } catch {
+          // no-op if not required by this SDK version
+        }
+        await promptMfa(); // opens Privy’s verification modal
+
+        // 3) If here, MFA succeeded → finalize session & go to /dashboard
+        const tok = await getAccessToken();
+        if (!tok) throw new Error("Missing Privy access token after MFA");
+        await postSession(tok);
+
+        if (!mounted) return;
+        onSuccess();
+        router.replace("/dashboard");
+      } catch (err: unknown) {
+        // Any error means cancel/fail → clear client session and bounce to /sign-in
+        const e = err as { message?: string };
+        try {
+          await logout();
+        } catch {
+          /* ignore */
+        }
+        if (!mounted) return;
+        onFail(e?.message || "MFA was canceled or failed.");
+        router.replace("/sign-in");
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, [
+    user?.mfaMethods, // include user to satisfy exhaustive-deps
+    showMfaEnrollmentModal,
+    promptMfa,
+    initMfa,
+    getAccessToken,
+    logout,
+    router,
+    onSuccess,
+    onFail,
+  ]);
+
+  // Lightweight overlay while Privy’s modal is active
+  return (
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md rounded-2xl border border-white/10 bg-white/5 p-4 text-center text-white">
+        <p className="text-sm">Opening secure MFA…</p>
+      </div>
+    </div>
+  );
+}
+
 export default function SignInPage() {
   const router = useRouter();
-  const { getAccessToken, ready } = usePrivy();
+  const { ready } = usePrivy();
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
+  const [pendingMfa, setPendingMfa] = useState(false);
 
-  async function finalize() {
-    const tok = await getAccessToken();
-    if (!tok) throw new Error("Missing Privy access token");
-    const { goTo } = await postSession(tok);
-    router.replace(goTo);
-  }
-
-  // Google OAuth (use onComplete + string error code)
+  // OAuth → after primary login completes, we push into Privy’s MFA UIs
   const { initOAuth, state: oauthState } = useLoginWithOAuth({
-    onComplete: finalize,
+    onComplete: () => {
+      setErr(null);
+      setPendingMfa(true);
+    },
     onError: (code) => setErr(code || "OAuth failed"),
   });
 
-  // Email OTP (use onComplete + string error code)
+  // Email OTP → after primary login completes, we push into Privy’s MFA UIs
   const {
     sendCode,
     loginWithCode,
     state: emailState,
   } = useLoginWithEmail({
-    onComplete: finalize,
+    onComplete: () => {
+      setErr(null);
+      setPendingMfa(true);
+    },
     onError: (code) => setErr(code || "Email login failed"),
   });
 
@@ -48,14 +139,13 @@ export default function SignInPage() {
   const isOAuthLoading = oauthState.status === "loading";
   const isWorking = isOAuthLoading || isEmailSending || isEmailSubmitting;
 
-  // read errors from state objects (some SDK versions include .error only when status==='error')
   const oauthErr =
     oauthState.status === "error"
-      ? (oauthState.error?.message ?? "OAuth failed")
+      ? oauthState.error?.message ?? "OAuth failed"
       : null;
   const emailFlowErr =
     emailState.status === "error"
-      ? (emailState.error?.message ?? "Email login failed")
+      ? emailState.error?.message ?? "Email login failed"
       : null;
 
   if (!ready) return null;
@@ -66,7 +156,8 @@ export default function SignInPage() {
         <header>
           <h1 className="text-2xl font-semibold">Sign in to Haven</h1>
           <p className="mt-1 text-sm text-zinc-400">
-            Continue with Google or an email code. We’ll restore your session.
+            Continue with Google or an email code. We’ll confirm MFA with
+            Privy’s secure UI before taking you to your dashboard.
           </p>
         </header>
 
@@ -182,6 +273,17 @@ export default function SignInPage() {
           </div>
         </footer>
       </div>
+
+      {/* MFA (Privy modal) — appears AFTER OAuth/Email completes */}
+      {pendingMfa && (
+        <PrivyMfaGate
+          onSuccess={() => setPendingMfa(false)}
+          onFail={(message) => {
+            setErr(message || "MFA failed.");
+            setPendingMfa(false);
+          }}
+        />
+      )}
     </div>
   );
 }

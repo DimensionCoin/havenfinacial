@@ -9,6 +9,7 @@ import { toast } from "react-hot-toast";
 import { useUser } from "@/providers/UserProvider";
 import { useResolveDepositOwnerByEmail } from "@/hooks/useResolveDepositOwnerByEmail";
 import { useSponsoredUsdcTransfer } from "@/hooks/useSponsoredUsdcTransfer";
+import { useBalances } from "@/providers/BalanceProvider";
 
 /* ------------------------------- NEW: contacts ---------------------------- */
 import Contacts from "@/components/shared/Contacts";
@@ -45,6 +46,7 @@ export default function UserTransfer({
   const router = useRouter();
   const { user } = useUser();
   const { getAccessToken } = usePrivy();
+  const balances = useBalances();
 
   // Sender (self-send guard)
   const fromOwner = user?.depositWallet?.address ?? null;
@@ -61,7 +63,7 @@ export default function UserTransfer({
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
   const targetCurrency = displayCurrency === "USDC" ? "USD" : displayCurrency;
 
-  const [rate, setRate] = useState<number | null>(null);
+  const [rate, setRate] = useState<number | null>(null); // USD -> target
   const [fxLoading, setFxLoading] = useState(false);
 
   useEffect(() => {
@@ -162,9 +164,39 @@ export default function UserTransfer({
     };
   }, [email, resolve, setResolveErr]);
 
+  /* ------------------------- deposit balance (USD) ------------------------ */
+  // From BalanceProvider (always USD/USDC-pegged)
+  const depositUsd = Number(balances.deposit.amountUsd || 0);
+
+  // Convert to user display currency for UI
+  const depositLocal = useMemo(
+    () => (rate ? depositUsd * rate : null),
+    [depositUsd, rate]
+  );
+
+  // Fee in local currency (charged on top)
+  const feeLocal = rate ? FEE_USDC * rate : null;
+
+  // Required USDC in the wallet for this transfer = amountUi + FEE_USDC
+  const amountUi = rate ? amountLocal / rate : NaN; // local -> USD/USDC
+  const requiredUsdc = validLocal && rate ? amountUi + FEE_USDC : NaN;
+
+  // Do they have enough? (compare to depositUsd)
+  const hasEnough = validLocal && rate ? depositUsd >= requiredUsdc : false;
+
+  // Helpful: a quick "use max" (leaves room for the fee)
+  const fillMax = useCallback(() => {
+    if (!rate) return;
+    // Max local user can send such that (amountUi + fee) <= depositUsd
+    const maxUi = Math.max(0, depositUsd - FEE_USDC); // USDC
+    const maxLocal = maxUi * rate; // back to local currency
+    setAmountLocalStr(
+      maxLocal > 0 ? String(Math.floor(maxLocal * 100) / 100) : "0"
+    );
+  }, [depositUsd, rate]);
+
   /* ---------------------------- derived amounts --------------------------- */
 
-  const feeLocal = rate ? FEE_USDC * rate : null; // fee charged ON TOP
   const youPayLocal =
     rate == null || !validLocal ? null : amountLocal + (feeLocal ?? 0);
   const theyReceiveLocal = rate == null || !validLocal ? null : amountLocal;
@@ -198,7 +230,8 @@ export default function UserTransfer({
     !meetsMin ||
     recipientState === "checking" ||
     recipientState === "error" ||
-    sendingToSelf;
+    sendingToSelf ||
+    !hasEnough;
 
   const explorerHref = (tx: string) =>
     EXPLORER_CLUSTER === "mainnet"
@@ -220,33 +253,25 @@ export default function UserTransfer({
       const accessToken = (await getAccessToken().catch(() => null)) ?? null;
 
       if (recipientState === "user" && resolvedPk) {
-        // ✅ Haven user → on-chain transfer (fee charged on top by backend)
         const sig = await send({
           fromOwnerBase58: fromPk.toBase58(),
           toOwnerBase58: resolvedPk.toBase58(),
           amountUi,
           accessToken,
-          // 👇 NEW: ask backend to notify the recipient user
           notify: {
             toOwnerBase58: resolvedPk.toBase58(),
-            amountUi, // lets server template a nice message
-            // message: note ? `“${note}”` : undefined, // optional override; omit to use server fallback
+            amountUi,
           },
-          // backendUrl: "/api/transfer" (default)
         });
         if (sig) onSuccess?.(sig);
       } else if (recipientState === "nonuser") {
-        // ✅ Non-Haven user → send to ESCROW, then record+email
-        // 1) On-chain: user signs transfer to ESCROW + fee to TREASURY
         const chainSig = await send({
           fromOwnerBase58: fromPk.toBase58(),
-          toOwnerBase58: ESCROW_OWNER, // escrow receives the full amount
-          amountUi, // recipient should receive this much
+          toOwnerBase58: ESCROW_OWNER,
+          amountUi,
           accessToken,
-          // backendUrl: "/api/transfer" (default)
         });
 
-        // 2) Tell the server to verify deltas & email the claim link
         const idempotencyKey =
           (typeof crypto !== "undefined" && crypto.randomUUID?.()) ||
           `email-claim-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -289,8 +314,6 @@ export default function UserTransfer({
     }
   };
 
-  /* ------------------------------ UI helpers ------------------------------ */
-
   /* --------------------------------- render ------------------------------- */
 
   return (
@@ -307,12 +330,8 @@ export default function UserTransfer({
 
       {/* Main form container */}
       <div className="relative group">
-        {/* Background glow effect */}
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-
-        {/* Main glass container */}
-        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
-          {/* Subtle inner glow */}
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%]">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
           <div className="relative space-y-6">
@@ -334,7 +353,6 @@ export default function UserTransfer({
                 Recipient Email
               </label>
 
-              {/* NEW: Contacts trigger — opens modal and autofills email on pick */}
               <div className="flex justify-end">
                 <Contacts
                   buttonLabel="Pick from Contacts"
@@ -411,9 +429,32 @@ export default function UserTransfer({
 
             {/* Amount */}
             <div className="space-y-4">
-              <label className="block text-sm font-semibold text-white/90">
-                Amount ({targetCurrency})
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="block text-sm font-semibold text-white/90">
+                  Amount ({targetCurrency})
+                </label>
+
+                {/* Small inline balance + Use max */}
+                <div className="flex items-center gap-3">
+                  <div className="text-[11px] sm:text-xs text-white/60">
+                    Available:{" "}
+                    <span className="font-medium text-white/80">
+                      {fmt(depositLocal)}
+                    </span>
+                   
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={fillMax}
+                    className="text-xs text-white/70 hover:text-white/95 underline-offset-2 hover:underline"
+                    disabled={!rate || depositUsd <= FEE_USDC}
+                  >
+                    Use max
+                  </button>
+                </div>
+              </div>
+
               <input
                 type="number"
                 min="0"
@@ -425,13 +466,16 @@ export default function UserTransfer({
                 inputMode="decimal"
               />
 
-              {/* Fee breakdown */}
+              {/* Fee & receive breakdown */}
               <div className="vision-window rounded-2xl border border-white/10 bg-white/5 backdrop-blur-sm p-4 sm:p-6 space-y-3">
-                {sendingToSelf && (
+                {/* Insufficient funds warning */}
+                {validLocal && !hasEnough && (
                   <div className="flex items-center gap-3 p-3 rounded-xl bg-red-500/10 border border-red-500/30">
                     <div className="w-2 h-2 rounded-full bg-red-400 flex-shrink-0" />
-                    <span className="text-sm text-red-400">
-                      You can&#39;t send to your own account.
+                    <span className="text-sm text-red-300">
+                      Not enough balance to cover the amount{" "}
+                      <span className="opacity-80">(incl. fee)</span>. Try a
+                      smaller amount or tap <b>Use max</b>.
                     </span>
                   </div>
                 )}
@@ -479,9 +523,7 @@ export default function UserTransfer({
               onClick={submit}
               className="group relative w-full overflow-hidden rounded-2xl bg-[rgb(182,255,62)] text-black py-4 sm:py-5 font-bold text-lg sm:text-xl disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[rgb(182,255,62)]/90 transition-all duration-300 shadow-[0_8px_32px_rgba(182,255,62,0.3)] hover:shadow-[0_12px_48px_rgba(182,255,62,0.4)] transform hover:scale-[1.02] active:scale-[0.98] disabled:hover:scale-100"
             >
-              {/* Button shimmer effect */}
               <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/20 to-transparent" />
-
               <div className="relative flex items-center justify-center gap-3">
                 {sending && (
                   <div className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin" />

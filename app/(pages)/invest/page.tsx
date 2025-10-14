@@ -115,15 +115,6 @@ export default function InvestmentApp() {
                   </li>
                 </ul>
               </SideCard>
-
-              <SideCard title="Shortcuts">
-                <div className="flex flex-wrap gap-2">
-                  <QuickLink href="/invest/sol" label="SOL" />
-                  <QuickLink href="/invest/usdc" label="USDC" />
-                  <QuickLink href="/invest/bonk" label="BONK" />
-                  <QuickLink href="/invest/wif" label="WIF" />
-                </div>
-              </SideCard>
             </aside>
           </div>
         ) : (
@@ -150,13 +141,6 @@ export default function InvestmentApp() {
             </section>
 
             <aside className="space-y-6">
-              <SideCard title="Next steps">
-                <ul className="space-y-3 text-sm text-white/70">
-                  <li>• Explore new tokens in Discover.</li>
-                  <li>• Rebalance by selling directly from each holding.</li>
-                  <li>• View per-token charts for deeper analysis.</li>
-                </ul>
-              </SideCard>
               <SideCard title="Resources">
                 <div className="flex flex-col gap-2">
                   <QuickLink href="/help/investing" label="Investing 101" />
