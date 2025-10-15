@@ -348,6 +348,51 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 type KycStatus = "none" | "pending" | "approved" | "rejected";
 
+/* ---------------------- NEW: token refresh helpers ---------------------- */
+/** Try to mint a fresh Privy token; fallback to polling until non-null. */
+async function getFreshAccessToken(
+  getAccessToken: (opts?: unknown) => Promise<string | null>,
+  maxMs = 15_000
+): Promise<string> {
+  const start = Date.now();
+
+  // Prefer a "fresh" read when supported by the SDK
+  try {
+    const fresh = await getAccessToken({ fresh: true });
+    if (fresh) return fresh;
+  } catch {
+    /* ignore */
+  }
+
+  // Otherwise poll for a stable token
+  while (Date.now() - start < maxMs) {
+    try {
+      const t = await getAccessToken();
+      if (t) return t;
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  throw new Error("Could not obtain a fresh access token");
+}
+
+/** After onboarding, ensure fresh token then hard reload to next route. */
+async function postOnboardRefresh(
+  getAccessToken: (opts?: unknown) => Promise<string | null>,
+  nextPath: string
+) {
+  try {
+    await getFreshAccessToken(getAccessToken, 15_000);
+  } catch {
+    // even if minting fails, proceed with reload to shake stale state
+  }
+  if (typeof window !== "undefined") {
+    window.location.replace(nextPath);
+  }
+}
+/* ----------------------------------------------------------------------- */
+
 export default function OnboardingPage() {
   const router = useRouter();
   const { ready, authenticated, getAccessToken, user } = usePrivy();
@@ -416,6 +461,13 @@ export default function OnboardingPage() {
     if (cur) setCurrency(cur);
   }, [countryISO, displayCurrency]);
 
+  useEffect(() => {
+    if (!ready || !authenticated) return;
+    // pre-warm a fresh token so the embedded wallet is ready for next actions
+    void getFreshAccessToken(getAccessToken).catch(() => {});
+  }, [ready, authenticated, getAccessToken]);
+
+
   // Helpers
   const cISO = countryISO.trim().toUpperCase();
   const hasNames = !!firstName.trim() && !!lastName.trim();
@@ -447,7 +499,7 @@ export default function OnboardingPage() {
     return Object.keys(fe).length === 0;
   }, [firstName, lastName, cISO, currencyChoice, tos, privacy, dob]);
 
-  // Your existing submit (unchanged except it uses current state)
+  // Your existing submit (unchanged UX; only success redirect is updated)
   const submit = useCallback(async () => {
     setErr(null);
     setFieldErrors({});
@@ -571,8 +623,9 @@ export default function OnboardingPage() {
           ? (rawKyc as KycStatus)
           : undefined;
 
-      if (kycStatus === "approved") router.replace("/dashboard");
-      else router.replace("/kyc/pending");
+      // 🔧 REPAIRED: force a fresh token + hard reload to ensure embedded wallet availability
+      const next = kycStatus === "approved" ? "/dashboard" : "/kyc/pending";
+      await postOnboardRefresh(getAccessToken, next);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -600,7 +653,6 @@ export default function OnboardingPage() {
     riskTolerance,
     experience,
     horizon,
-    router,
   ]);
 
   if (!ready) return null;
