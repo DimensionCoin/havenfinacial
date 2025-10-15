@@ -81,6 +81,59 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   });
 }
 
+// Small utilities to help ensure a fresh token & hydrated signer
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function ensureFreshAccessToken(
+  getAccessToken: (opts?: unknown) => Promise<string | null>
+) {
+  try {
+    // Some SDK versions support { fresh: true }
+    await getAccessToken({ fresh: true });
+  } catch {
+    // Ignore; we just nudged refresh best-effort
+  }
+}
+
+async function waitForEmbeddedSigner(opts: {
+  solWallets: ReturnType<typeof useSolanaWallets>["wallets"];
+  desiredAddress?: string | null;
+  getAccessToken: (opts?: unknown) => Promise<string | null>;
+  maxMs?: number;
+}) {
+  const { solWallets, desiredAddress, getAccessToken } = opts;
+  const maxMs = opts.maxMs ?? 15_000;
+  const deadline = Date.now() + maxMs;
+  let nudged = false;
+
+  while (Date.now() < deadline) {
+    const byAddress =
+      desiredAddress &&
+      solWallets.find(
+        (w) =>
+          w.address && w.address.toLowerCase() === desiredAddress.toLowerCase()
+      );
+
+    const embedded =
+      byAddress || solWallets.find((w) => w.walletClientType === "privy");
+
+    if (embedded?.signTransaction) {
+      return embedded.signTransaction;
+    }
+
+    // On first miss, nudge Privy to mint a fresh token (hydrates wallets)
+    if (!nudged) {
+      nudged = true;
+      await ensureFreshAccessToken(getAccessToken);
+    }
+
+    await sleep(250);
+  }
+  throw new Error("Embedded Solana wallet not available for signing");
+}
+
 /* ---------------------------- Page --------------------------- */
 const SavingsAccount: React.FC = () => {
   const { user, loading: userLoading, refresh: refreshUser } = useUser();
@@ -293,18 +346,16 @@ const SavingsAccount: React.FC = () => {
   /* ----------------- Embedded wallet signer (Privy) ----------------- */
   const signWithPrivy = useCallback(
     async (tx: VersionedTransaction): Promise<VersionedTransaction> => {
-      const primary =
-        solWallets.find((w) => {
-          if (!walletAddress) return false;
-          return w.address.toLowerCase() === walletAddress.toLowerCase();
-        }) ?? solWallets.find((w) => w.walletClientType === "privy");
-
-      if (!primary?.signTransaction) {
-        throw new Error("Embedded Solana wallet not available for signing");
-      }
-      return await primary.signTransaction(tx);
+      // Wait for embedded signer and nudge token refresh if needed
+      const signTransaction = await waitForEmbeddedSigner({
+        solWallets,
+        desiredAddress: walletAddress,
+        getAccessToken,
+        maxMs: 15_000,
+      });
+      return await signTransaction(tx);
     },
-    [solWallets, walletAddress]
+    [solWallets, walletAddress, getAccessToken]
   );
 
   /* -------------------- Open + deposit (first time) -------------------- */
@@ -314,6 +365,9 @@ const SavingsAccount: React.FC = () => {
       if (!ready || !authenticated) return void toast.error("Please sign in");
 
       try {
+        // Proactively ensure a fresh token (helps first-run hydration in prod)
+        await ensureFreshAccessToken(getAccessToken);
+
         const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
 
         await openAndDepositHook({
@@ -349,6 +403,7 @@ const SavingsAccount: React.FC = () => {
       refreshApy,
       refreshInterest,
       toUsd,
+      getAccessToken,
     ]
   );
 
@@ -362,6 +417,9 @@ const SavingsAccount: React.FC = () => {
       if (!ready || !authenticated) return void toast.error("Please sign in");
 
       try {
+        // Proactively ensure a fresh token for subsequent actions
+        await ensureFreshAccessToken(getAccessToken);
+
         const amountUsdUi = toUsd(amountLocalUi); // convert local -> USD/USDC
 
         if (kind === "deposit") {
@@ -415,6 +473,7 @@ const SavingsAccount: React.FC = () => {
       withdrawAction,
       signWithPrivy,
       toUsd,
+      getAccessToken,
     ]
   );
 
@@ -676,7 +735,7 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={label}
-      className="group relative overflow-hidden vision-button flex flex-col items-center justify-center gap-2 sm:gap-3 px-2 py-4 sm:px-3 sm:py-4 text-white/90 disabled:opacity-50 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-[1.02] active:scale-[0.98] hover:shadow-[0_8px_32px_rgba(182,255,62,0.15)]"
+      className="group relative overflow-hidden vision-button flex flex-col items-center justify-center gap-2 sm:gap-3 px-2 py-4 sm:px-3 sm:py-4 text-white/90 disabled:opacity-50 rounded-2xl bg白/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-[1.02] active:scale-[0.98] hover:shadow-[0_8px_32px_rgba(182,255,62,0.15)]"
     >
       <div className="absolute inset-0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
       <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-[rgb(182,255,62)]/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
