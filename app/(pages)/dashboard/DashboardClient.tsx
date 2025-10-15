@@ -1,6 +1,7 @@
 "use client";
 
 import PendingEmailClaims from "@/components/shared/PendingEmailClaims";
+import { Section } from "lucide-react";
 import nextDynamic from "next/dynamic";
 
 function HeroSkeleton() {
@@ -48,20 +49,25 @@ const InvestAccount = nextDynamic(
 export default function DashboardClient() {
   return (
     <main className="py-3 px-4 space-y-4">
-      <PendingEmailClaims />
-      <Hero />
+      <div>
+        <p className="text-white font-semibold text-2xl">Welcome to Haven</p>
+        <PendingEmailClaims />
 
-      {/* Accounts (horizontal) */}
-      <AccountsCarousel title="Accounts">
-        <DepositAccount />
-        <SavingsAccount />
-      </AccountsCarousel>
+        {/* Accounts (horizontal) */}
+        <AccountsCarousel title="Accounts">
+          <DepositAccount />
+          <SavingsAccount />
+        </AccountsCarousel>
 
-      {/* Invest below */}
-      <section className="space-y-2">
-        <h2 className="text-sm font-semibold text-white/80">Invest</h2>
-        <InvestAccount />
-      </section>
+        {/* Invest below */}
+        <section className="space-y-2 mt-4">
+          <h2 className="text-sm font-semibold text-white/80">Invest</h2>
+          <InvestAccount />
+        </section>
+        <section className="mt-8">
+          <Hero />
+        </section>
+      </div>
     </main>
   );
 }

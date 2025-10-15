@@ -149,12 +149,7 @@ export default function Hero() {
   return (
     <header className="mb-8 mt-4">
       <div className="space-y-4">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold text-white/90">
-            Hello, {displayName}
-          </h1>
-        </div>
-
+        
         <div className="group relative vision-perspective">
           <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
           <div className="relative bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] border border-white/20 rounded-3xl p-4 px-5 shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500">
