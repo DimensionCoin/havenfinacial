@@ -47,7 +47,7 @@ const InvestAccount = nextDynamic(
 
 export default function DashboardClient() {
   return (
-    <main className="py-3 px-4 space-y-3">
+    <main className="py-3 px-4 space-y-4">
       <PendingEmailClaims />
       <Hero />
 

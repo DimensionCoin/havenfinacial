@@ -175,29 +175,66 @@ const SavingsAccount: React.FC = () => {
   /* --------------------- FX (fetch even before account exists) ---------------------- */
   const convertFx = useCallback(
     async (amount: number, currency: string): Promise<FxResponse> => {
-      const accessToken = authenticated
-        ? await getAccessToken().catch(() => null)
-        : null;
+      // Get bearer if possible, but don't require it (cookie may already auth you)
+      let bearer: string | null = null;
+      try {
+        bearer = (await getAccessToken()) || null;
+      } catch {
+        bearer = null;
+      }
+
       const url = `/api/fx?amount=${encodeURIComponent(
         amount
       )}&currency=${encodeURIComponent(currency)}`;
-      const resp = await withTimeout(
-        fetch(url, {
-          method: "GET",
-          cache: "no-store",
-          credentials: "include",
-          headers: accessToken
-            ? { Authorization: `Bearer ${accessToken}` }
-            : {},
-        }),
-        8_000,
-        "FX fetch"
-      );
-      const raw = await resp.text();
-      if (!resp.ok) throw new Error(raw);
-      return JSON.parse(raw) as FxResponse;
+
+      // small helper
+      const doFetch = async (withBearer: boolean) => {
+        const resp = await withTimeout(
+          fetch(url, {
+            method: "GET",
+            cache: "no-store",
+            credentials: "include", // ✅ sends haven_session
+            headers:
+              withBearer && bearer ? { Authorization: `Bearer ${bearer}` } : {},
+          }),
+          8_000,
+          "FX fetch"
+        );
+
+        const raw = await resp.text();
+        // Try JSON first; server might send text on error
+        const json = (() => {
+          try {
+            return raw ? JSON.parse(raw) : null;
+          } catch {
+            return null;
+          }
+        })();
+
+        if (!resp.ok) {
+          // surface a clean message
+          const msg =
+            json &&
+            typeof json === "object" &&
+            "error" in json &&
+            typeof json.error === "string"
+              ? json.error
+              : raw || `HTTP ${resp.status}`;
+          throw new Error(msg);
+        }
+
+        return (json || {}) as FxResponse;
+      };
+
+      try {
+        // First try with bearer (if we have one)
+        return await doFetch(true);
+      } catch {
+        // If bearer might be expired, try once more without it—cookie may still be valid
+        return await doFetch(false);
+      }
     },
-    [authenticated, getAccessToken]
+    [getAccessToken]
   );
 
   useEffect(() => {
@@ -401,7 +438,7 @@ const SavingsAccount: React.FC = () => {
 
         <div className="relative group">
           <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
+          <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
             <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
             <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
@@ -478,7 +515,7 @@ const SavingsAccount: React.FC = () => {
 
       <div className="relative group">
         <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
-        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px]">
+        <div className="relative vision-window p-4 sm:p-6 lg:p-8 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] shadow-[0_32px_64px_rgba(0,0,0,0.4),0_16px_32px_rgba(0,0,0,0.2),inset_0_1px_0_rgba(255,255,255,0.1),inset_0_-1px_0_rgba(0,0,0,0.2)] hover:shadow-[0_40px_80px_rgba(0,0,0,0.5),0_20px_40px_rgba(0,0,0,0.3),inset_0_2px_0_rgba(255,255,255,0.12)] transition-all duration-500 transform-gpu">
           <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-white/5 via-transparent to-transparent pointer-events-none" />
 
           <div className="flex items-center justify-between gap-2 mb-6 sm:mb-8">
@@ -574,7 +611,7 @@ const SavingsAccount: React.FC = () => {
 
             {/* Right-side stats: APY */}
             <div className="flex flex-col gap-2 sm:gap-3">
-              <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm">
+              <div className="group vision-button p-3 sm:p-4 rounded-2xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-[rgb(182,255,62)]/30 transition-all duration-300 backdrop-blur-sm transform hover:scale-[1.02] active:scale-[0.98] hover:shadow-[0_8px_32px_rgba(182,255,62,0.15)]">
                 <div className="text-right">
                   <div className="text-xs sm:text-sm font-mono text-white/70 group-hover:text-[rgb(182,255,62)] transition-colors">
                     {!apyLoading ? `APY ${formatPct(apyPct)}` : "APY …"}
@@ -682,7 +719,7 @@ function AmountModal({
       ? num
       : valid && Number.isFinite(fxRate) && fxRate > 0
       ? num / fxRate // local -> USD using USD->display rate
-      : NaN;
+      : Number.NaN;
 
   const submit = async () => {
     const v = Number(amount);
@@ -816,7 +853,7 @@ function OpenAccountModal({
       ? num
       : valid && Number.isFinite(fxRate) && fxRate > 0
       ? num / fxRate // local -> USD using USD->display rate
-      : NaN;
+      : Number.NaN;
 
   const submit = async () => {
     const v = Number(amount);

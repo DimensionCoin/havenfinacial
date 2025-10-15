@@ -1,6 +1,7 @@
 // app/api/fx/route.ts
-import { NextResponse } from "next/server";
+import { NextResponse, NextRequest } from "next/server";
 import { PrivyClient } from "@privy-io/server-auth";
+import { jwtVerify } from "jose";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 
@@ -9,25 +10,66 @@ export const dynamic = "force-dynamic";
 
 const APP_ID = process.env.PRIVY_APP_ID!;
 const SECRET = process.env.PRIVY_SECRET_KEY!;
-if (!APP_ID || !SECRET) throw new Error("Missing Privy env vars");
+const JWT_SECRET = process.env.JWT_SECRET!;
+if (!APP_ID || !SECRET || !JWT_SECRET) throw new Error("Missing env vars");
+
+const privy = new PrivyClient(APP_ID, SECRET);
+const enc = new TextEncoder();
+const SESSION_COOKIE = "haven_session";
 
 // ---------- helpers ----------
-function readAccessTokenFromRequest(req: Request): string | null {
+function readBearer(req: Request): string | null {
   const authz = req.headers.get("authorization");
   if (authz?.toLowerCase().startsWith("bearer ")) {
     const t = authz.slice(7).trim();
     if (t) return t;
   }
-  const cookie = req.headers.get("cookie");
-  if (cookie) {
-    const match = cookie
-      .split(";")
-      .map((s) => s.trim())
-      .find((c) => c.toLowerCase().startsWith("privy-token="));
-    if (match)
-      return decodeURIComponent(match.substring("privy-token=".length));
-  }
   return null;
+}
+
+function readCookie(req: Request, name: string): string | null {
+  const cookie = req.headers.get("cookie");
+  if (!cookie) return null;
+  const target = name.toLowerCase() + "=";
+  const part = cookie
+    .split(";")
+    .map((s) => s.trim())
+    .find((c) => c.toLowerCase().startsWith(target));
+  return part ? decodeURIComponent(part.substring(target.length)) : null;
+}
+
+async function getUserDocFromRequest(req: Request) {
+  // 1) Prefer Privy bearer: verify and find by privyId
+  const bearer = readBearer(req);
+  if (bearer) {
+    try {
+      const claims = await privy.verifyAuthToken(bearer);
+      const privyId = claims.userId;
+      await connect();
+      const byPrivy = await User.findOne({ privyId }).lean();
+      if (byPrivy) return byPrivy;
+    } catch {
+      // fall through to cookie
+    }
+  }
+
+  // 2) Fallback to app session cookie (haven_session) -> verify JWT -> find by _id
+  const sessionJwt = readCookie(req, SESSION_COOKIE);
+  if (!sessionJwt) return null;
+
+  try {
+    const { payload } = await jwtVerify(sessionJwt, enc.encode(JWT_SECRET));
+    const uid =
+      (typeof payload.uid === "string" && payload.uid) ||
+      (typeof payload.userId === "string" && payload.userId) ||
+      null;
+    if (!uid) return null;
+    await connect();
+    const byId = await User.findById(uid).lean();
+    return byId;
+  } catch {
+    return null;
+  }
 }
 
 const norm3 = (s?: string) => (s || "").trim().toUpperCase();
@@ -42,9 +84,7 @@ async function fetchRateUSDTo_Frankfurter(
     `https://api.frankfurter.app/latest?from=USD&to=${encodeURIComponent(
       target
     )}`,
-    {
-      next: { revalidate: 300 },
-    }
+    { next: { revalidate: 300 } }
   );
   if (!r.ok) throw new Error(`Frankfurter error ${r.status}`);
   const j = (await r.json()) as {
@@ -110,7 +150,7 @@ async function fetchRateUSDTo(target: string) {
 }
 
 // ---------- route ----------
-export async function GET(req: Request) {
+export async function GET(req: NextRequest) {
   try {
     const url = new URL(req.url);
 
@@ -123,22 +163,13 @@ export async function GET(req: Request) {
       return new NextResponse("Invalid amount", { status: 400 });
     }
 
-    // auth
-    const accessToken = readAccessTokenFromRequest(req);
-    if (!accessToken)
-      return new NextResponse("Missing access token", { status: 401 });
-
-    const client = new PrivyClient(APP_ID, SECRET);
-    const claims = await client.verifyAuthToken(accessToken);
-    const privyId = claims.userId;
+    // auth (bearer OR haven_session)
+    const userDoc = await getUserDocFromRequest(req);
+    if (!userDoc) return new NextResponse("Unauthorized", { status: 401 });
 
     // find user's target currency if not provided
-    await connect();
-    const doc = await User.findOne({ privyId }).lean();
-    if (!doc) return new NextResponse("User not found", { status: 404 });
-
     const target = normalizeTargetCurrency(
-      toParam || doc.displayCurrency || "USD"
+      toParam || userDoc.displayCurrency || "USD"
     );
 
     // USDC is pegged to USD
