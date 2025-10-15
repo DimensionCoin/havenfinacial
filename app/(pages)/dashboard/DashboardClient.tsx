@@ -1,7 +1,6 @@
 "use client";
 
 import PendingEmailClaims from "@/components/shared/PendingEmailClaims";
-import { Section } from "lucide-react";
 import nextDynamic from "next/dynamic";
 
 function HeroSkeleton() {

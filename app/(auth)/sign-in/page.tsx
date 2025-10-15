@@ -13,9 +13,31 @@ import { FcGoogle } from "react-icons/fc";
 import Link from "next/link";
 import { postSession } from "@/lib/postSession";
 
+/* ------------------------------------------------------------------ */
+/* Force-reset helper: revoke Privy session and hard-reload to sign-in */
+/* ------------------------------------------------------------------ */
+async function hardResetToSignIn({
+  logout,
+  router,
+}: {
+  logout: () => Promise<void>;
+  router: ReturnType<typeof useRouter>;
+}) {
+  try {
+    await logout();
+  } catch {
+    /* ignore */
+  }
+  if (typeof window !== "undefined") {
+    window.location.replace("/sign-in");
+  } else {
+    router.replace("/sign-in");
+  }
+}
+
 /**
  * Privy MFA: enroll (if needed) + verify, then finalize session.
- * No visual changes here; just used as an overlay while Privy’s modals are open.
+ * Renders an overlay while Privy’s modals are open.
  */
 function PrivyMfaGate({
   onSuccess,
@@ -27,7 +49,7 @@ function PrivyMfaGate({
   const router = useRouter();
   const { user, getAccessToken, logout } = usePrivy();
   const { showMfaEnrollmentModal } = useMfaEnrollment();
-  const { promptMfa, init: initMfa } = useMfa();
+  const { promptMfa, init: initMfa /*, cancel */ } = useMfa();
 
   useEffect(() => {
     let mounted = true;
@@ -37,40 +59,45 @@ function PrivyMfaGate({
         const hasAnyMfa =
           Array.isArray(user?.mfaMethods) &&
           (user?.mfaMethods?.length ?? 0) > 0;
+
         if (!hasAnyMfa) {
+          // If closed/canceled by the user, this throws and is caught below.
           await showMfaEnrollmentModal();
         }
 
         try {
+          // Some SDK versions expose init; safe to try.
           // @ts-expect-error init may be optional depending on SDK version
           await initMfa();
         } catch {
           /* noop */
         }
+
+        // If canceled/dismissed, this throws.
         await promptMfa();
 
         const tok = await getAccessToken();
         if (!tok) throw new Error("Missing Privy access token after MFA");
+
         await postSession(tok);
 
         if (!mounted) return;
         onSuccess();
         router.replace("/dashboard");
       } catch (err: unknown) {
-        const e = err as { message?: string };
-        try {
-          await logout();
-        } catch {
-          /* ignore */
-        }
         if (!mounted) return;
+        const e = err as { message?: string };
+
+        // Treat *any* failure/dismissal as a hard reset back to sign-in.
         onFail(e?.message || "MFA was canceled or failed.");
-        router.replace("/sign-in");
+        await hardResetToSignIn({ logout, router });
       }
     })();
 
     return () => {
       mounted = false;
+      // Optional on newer SDKs:
+      // try { cancel?.(); } catch {}
     };
   }, [
     user?.mfaMethods,
@@ -94,7 +121,8 @@ function PrivyMfaGate({
 }
 
 export default function SignInPage() {
-  const { ready } = usePrivy();
+  const router = useRouter();
+  const { ready, logout } = usePrivy();
 
   const [email, setEmail] = useState("");
   const [code, setCode] = useState("");
@@ -147,7 +175,7 @@ export default function SignInPage() {
         <div className="absolute inset-0 bg-[radial-gradient(50%_35%_at_80%_10%,rgba(182,255,62,0.10),transparent),radial-gradient(40%_30%_at_10%_80%,rgba(182,255,62,0.06),transparent)]" />
       </div>
 
-      {/* Subtle grid + vignette to add depth */}
+      {/* Subtle grid + vignette */}
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute inset-0 opacity-[0.04] [background:linear-gradient(rgba(255,255,255,0.2)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.2)_1px,transparent_1px)] [background-size:24px_24px]" />
         <div className="absolute inset-0 bg-[radial-gradient(80%_60%_at_50%_30%,rgba(0,0,0,0),rgba(0,0,0,0.5))]" />
@@ -312,9 +340,10 @@ export default function SignInPage() {
       {pendingMfa && (
         <PrivyMfaGate
           onSuccess={() => setPendingMfa(false)}
-          onFail={(message) => {
+          onFail={async (message) => {
             setErr(message || "MFA failed.");
             setPendingMfa(false);
+            await hardResetToSignIn({ logout, router });
           }}
         />
       )}

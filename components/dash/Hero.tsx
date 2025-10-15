@@ -33,10 +33,7 @@ export default function Hero() {
   const { totals, loading: balancesLoading } = useBalances();
   const { ready, getAccessToken } = usePrivy();
 
-  const displayName = useMemo(
-    () => (user?.firstName || "").trim() || "there",
-    [user?.firstName]
-  );
+ 
 
   // Normalize USDC -> USD for display/FX
   const currency = useMemo(() => {

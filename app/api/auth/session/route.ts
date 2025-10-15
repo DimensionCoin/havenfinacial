@@ -1,6 +1,9 @@
 import "server-only";
 import { NextRequest, NextResponse } from "next/server";
-import { PrivyClient, type WalletApiCreateRequestType } from "@privy-io/server-auth";
+import {
+  PrivyClient,
+  type WalletApiCreateRequestType,
+} from "@privy-io/server-auth";
 import { connect } from "@/lib/db";
 import User from "@/models/User";
 import { SignJWT } from "jose";
@@ -25,8 +28,10 @@ function extractEmailFromPrivyUser(u: unknown): string | undefined {
   const obj = u as Record<string, unknown>;
 
   const emailObj = obj.email as { address?: unknown } | undefined;
-  const direct = typeof emailObj?.address === "string" ? emailObj.address : undefined;
-  if (typeof direct === "string" && direct.includes("@")) return direct.toLowerCase();
+  const direct =
+    typeof emailObj?.address === "string" ? emailObj.address : undefined;
+  if (typeof direct === "string" && direct.includes("@"))
+    return direct.toLowerCase();
 
   const linked = obj.linkedAccounts as unknown;
   if (Array.isArray(linked)) {
@@ -35,14 +40,22 @@ function extractEmailFromPrivyUser(u: unknown): string | undefined {
       const maybe =
         (typeof r.email === "string" && r.email) ||
         (typeof r.address === "string" && r.address) ||
-        (typeof (r.wallet as Record<string, unknown> | undefined)?.address === "string"
+        (typeof (r.wallet as Record<string, unknown> | undefined)?.address ===
+        "string"
           ? ((r.wallet as Record<string, unknown>).address as string)
           : undefined);
       if (maybe && maybe.includes("@")) return maybe.toLowerCase();
     }
   }
 
-  const providerKeys = ["google", "apple", "github", "discord", "twitter", "linkedin"] as const;
+  const providerKeys = [
+    "google",
+    "apple",
+    "github",
+    "discord",
+    "twitter",
+    "linkedin",
+  ] as const;
   for (const key of providerKeys) {
     const p = obj[key] as Record<string, unknown> | undefined;
     const maybe =
@@ -72,13 +85,21 @@ function extractSolanaWalletFromPrivyUser(
       const r = a as Record<string, unknown>;
       const chainType =
         (r.chainType as string | undefined) ||
-        ((r.wallet as Record<string, unknown> | undefined)?.chainType as string | undefined) ||
+        ((r.wallet as Record<string, unknown> | undefined)?.chainType as
+          | string
+          | undefined) ||
         "";
       if (chainType.toLowerCase() === "solana") {
-        const address = (r.address as string | undefined) ||
-          ((r.wallet as Record<string, unknown> | undefined)?.address as string | undefined);
-        const id = (r.id as string | undefined) ||
-          ((r.wallet as Record<string, unknown> | undefined)?.id as string | undefined);
+        const address =
+          (r.address as string | undefined) ||
+          ((r.wallet as Record<string, unknown> | undefined)?.address as
+            | string
+            | undefined);
+        const id =
+          (r.id as string | undefined) ||
+          ((r.wallet as Record<string, unknown> | undefined)?.id as
+            | string
+            | undefined);
         if (address && id) return { id, address, chainType: "solana" };
       }
     }
@@ -189,9 +210,15 @@ export async function POST(req: NextRequest) {
           }
         );
         // reflect in-memory for the JWT payload if you ever include it
-        (user as unknown as {
-          depositWallet?: { walletId: string; address: string; chainType: "solana" };
-        }).depositWallet = {
+        (
+          user as unknown as {
+            depositWallet?: {
+              walletId: string;
+              address: string;
+              chainType: "solana";
+            };
+          }
+        ).depositWallet = {
           walletId: sol.id,
           address: sol.address,
           chainType: "solana",

@@ -13,6 +13,50 @@ import { FcGoogle } from "react-icons/fc";
 import Link from "next/link";
 import { postSession } from "@/lib/postSession";
 
+/* ------------------------------- helpers ------------------------------- */
+
+/** Try to get a fresh Privy token after MFA; retry for a short window. */
+async function getStableToken(
+  getAccessToken: () => Promise<string | null>,
+  maxMs = 20000
+): Promise<string> {
+  const start = Date.now();
+
+  // Try optional "fresh" read if the SDK supports it.
+  // @ts-expect-error some SDKs accept an options object
+  const maybeFresh = await getAccessToken({ fresh: true }).catch(() => null);
+  if (maybeFresh) return maybeFresh;
+
+  // Otherwise poll for a stable token.
+  while (Date.now() - start < maxMs) {
+    try {
+      const t = await getAccessToken();
+      if (t) return t;
+    } catch {
+      /* ignore */
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error("Missing Privy access token after MFA.");
+}
+
+/** Hard reset: revoke Privy session and force return to /sign-in */
+async function hardResetToSignIn({
+  logout,
+  router,
+}: {
+  logout: () => Promise<void>;
+  router: ReturnType<typeof useRouter>;
+}) {
+  try {
+    await logout();
+  } catch {
+    /* ignore */
+  }
+  if (typeof window !== "undefined") window.location.replace("/sign-in");
+  else router.replace("/sign-in");
+}
+
 export default function SignUpPage() {
   const router = useRouter();
   const { user, getAccessToken, ready, logout } = usePrivy();
@@ -23,86 +67,78 @@ export default function SignUpPage() {
   const [code, setCode] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
+  // prevent finalize from firing twice (OAuth + Email flows can double fire)
   const finalizingRef = useRef(false);
 
-  async function maybeRunMfa(): Promise<boolean> {
+  /** Enroll (if needed) then verify MFA. Returns true if completed, false if canceled/failed. */
+  async function requireMfaOrFail(): Promise<boolean> {
     try {
       const hasAnyMfa =
         Array.isArray(user?.mfaMethods) && (user?.mfaMethods?.length ?? 0) > 0;
 
+      // 1) Enroll MFA if user has none (passkey / authenticator)
       if (!hasAnyMfa) {
-        // Enroll (passkey / authenticator) if they have none
-        await showMfaEnrollmentModal();
+        await showMfaEnrollmentModal(); // throws if user cancels
       }
 
-      // Some SDK versions need init; it's a no-op otherwise
+      // 2) Some SDK versions require init(); safe to try
       try {
-        // @ts-expect-error optional on some versions
+        // @ts-expect-error optional in some SDK versions
         await initMfa();
-      } catch {}
+      } catch {
+        /* noop */
+      }
 
-      await promptMfa(); // throws on cancel / wrong code / lockout
+      // 3) Prompt verification (throws on cancel/fail/timeout/max attempts)
+      await promptMfa();
+
       return true;
     } catch {
+      // Optional: surface a friendlier message in the UI
+      // setErr(e instanceof Error ? e.message : "MFA failed or was canceled.");
       return false;
     }
   }
 
-  // Try to create the app session. If backend needs MFA, do MFA once and retry.
-  async function ensureAppSession(): Promise<boolean> {
-    let tok = await getAccessToken();
-    if (!tok) throw new Error("Missing Privy access token");
-
-    try {
-      await postSession(tok); // your existing server session creation
-      return true; // no MFA needed
-    } catch {
-      // Server likely enforced MFA. Try MFA once, then retry postSession.
-      const mfaOk = await maybeRunMfa();
-      if (!mfaOk) return false;
-
-      tok = await getAccessToken();
-      if (!tok) throw new Error("Missing token after MFA");
-      await postSession(tok); // retry after successful MFA
-      return true;
-    }
-  }
-
+  /** Create server session. Always run MFA first for signup. Then postSession and route. */
   async function finalize() {
     if (finalizingRef.current) return;
     finalizingRef.current = true;
     setErr(null);
 
     try {
-      const ok = await ensureAppSession();
-      if (!ok) {
-        // MFA failed/cancelled → log out and send to sign-in
-        try {
-          await logout();
-        } catch {}
-        router.replace("/sign-in");
+      // 1) Enroll + verify MFA (mandatory for signup flow)
+      const mfaOk = await requireMfaOrFail();
+      if (!mfaOk) {
+        await hardResetToSignIn({ logout, router }); // user canceled/failed MFA
         return;
       }
 
-      // Good to go
+      // 2) Get a stable token (post-MFA tokens can be momentarily null/stale)
+      const tok = await getStableToken(getAccessToken, 20000);
+
+      // 3) Create app session (idempotent)
+      await postSession(tok);
+
+      // 4) Force onboarding for signup flow (ignore server goTo to be explicit)
       router.replace("/onboarding");
     } catch (e) {
-      // Any unexpected failure: clean up and show a safe error
-      try {
-        await logout();
-      } catch {}
-      setErr(e instanceof Error ? e.message : String(e));
-      router.replace("/sign-in");
+      // Log for debugging during dev
+      console.error("Signup finalize error:", e);
+      setErr(e instanceof Error ? e.message : "Sign-up failed.");
+      await hardResetToSignIn({ logout, router });
     } finally {
       finalizingRef.current = false;
     }
   }
 
+  // OAuth → then finalize (MFA + session + redirect)
   const { initOAuth, state: oauthState } = useLoginWithOAuth({
     onComplete: finalize,
     onError: (code) => setErr(code || "OAuth failed"),
   });
 
+  // Email OTP → then finalize (MFA + session + redirect)
   const {
     sendCode,
     loginWithCode,
@@ -120,6 +156,7 @@ export default function SignUpPage() {
 
   if (!ready) return null;
 
+  /* ------------------------------- UI (unchanged styling) ------------------------------- */
   return (
     <main className="relative min-h-[100svh] bg-black/40 text-white overflow-hidden">
       {/* Ambient background */}
@@ -143,8 +180,8 @@ export default function SignUpPage() {
               Join <span className="text-[rgb(182,255,62)]">Haven</span>
             </h1>
             <p className="mt-1 text-sm text-white/60">
-              Start with Google or email. We’ll verify MFA if your account
-              requires it.
+              Start with Google or email. We’ll enroll & verify MFA to secure
+              your account.
             </p>
           </div>
 
