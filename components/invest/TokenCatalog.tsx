@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { X, Search } from "lucide-react";
+import {
+  X,
+  Search,
+  TrendingUp,
+  TrendingDown,
+  Activity,
+  DollarSign,
+  BarChart3,
+  Sparkles,
+} from "lucide-react";
 import {
   type TokenMeta,
   tokensForCluster,
@@ -237,67 +246,194 @@ export default function TokenCatalog({
     return `${sign}${p.toFixed(2)}%`;
   };
 
+  const marketStats = useMemo(() => {
+    let totalGainers = 0;
+    let totalLosers = 0;
+    let avgChange = 0;
+    let count = 0;
+
+    displayTokens.forEach((t) => {
+      const mainnetMint = getMintFor(t, MAINNET);
+      const p = mainnetMint ? prices[mainnetMint] : undefined;
+      const change = p?.priceChange24h;
+      if (typeof change === "number" && Number.isFinite(change)) {
+        if (change > 0) totalGainers++;
+        if (change < 0) totalLosers++;
+        avgChange += change;
+        count++;
+      }
+    });
+
+    return {
+      totalTokens: displayTokens.length,
+      gainers: totalGainers,
+      losers: totalLosers,
+      avgChange: count > 0 ? avgChange / count : 0,
+    };
+  }, [displayTokens, prices]);
+
   /* -------------------------------- render -------------------------------- */
 
   return (
-    <div className={`min-h-screen ${className || ""}`}>
-      {/* Compact sticky header */}
-      <header className="sticky top-0 z-20 border-b border-white/10 backdrop-blur-xl">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:gap-4">
+    <div
+      className={`min-h-screen bg-gradient-to-b from-black via-black to-[rgb(182,255,62)]/5 ${
+        className || ""
+      }`}
+    >
+      <div className="border-b border-white/10 bg-black/60 backdrop-blur-xl">
+        <div className="container mx-auto px-4 py-6 lg:py-8">
+          {/* Market Overview Stats */}
+          <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:gap-4">
+            <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-transparent p-4 backdrop-blur-sm transition-all hover:border-[rgb(182,255,62)]/30 hover:shadow-lg hover:shadow-[rgb(182,255,62)]/10">
+              <div className="absolute inset-0 bg-gradient-to-br from-[rgb(182,255,62)]/5 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="rounded-lg bg-[rgb(182,255,62)]/10 p-2">
+                    <BarChart3 className="h-4 w-4 text-[rgb(182,255,62)]" />
+                  </div>
+                  <span className="text-xs font-medium text-white/60">
+                    Markets
+                  </span>
+                </div>
+                <div className="text-2xl font-bold text-white">
+                  {marketStats.totalTokens}
+                </div>
+              </div>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-transparent p-4 backdrop-blur-sm transition-all hover:border-green-500/30 hover:shadow-lg hover:shadow-green-500/10">
+              <div className="absolute inset-0 bg-gradient-to-br from-green-500/5 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="rounded-lg bg-green-500/10 p-2">
+                    <TrendingUp className="h-4 w-4 text-green-400" />
+                  </div>
+                  <span className="text-xs font-medium text-white/60">
+                    Gainers
+                  </span>
+                </div>
+                <div className="text-2xl font-bold text-green-400">
+                  {marketStats.gainers}
+                </div>
+              </div>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-transparent p-4 backdrop-blur-sm transition-all hover:border-red-500/30 hover:shadow-lg hover:shadow-red-500/10">
+              <div className="absolute inset-0 bg-gradient-to-br from-red-500/5 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="rounded-lg bg-red-500/10 p-2">
+                    <TrendingDown className="h-4 w-4 text-red-400" />
+                  </div>
+                  <span className="text-xs font-medium text-white/60">
+                    Losers
+                  </span>
+                </div>
+                <div className="text-2xl font-bold text-red-400">
+                  {marketStats.losers}
+                </div>
+              </div>
+            </div>
+
+            <div className="group relative overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-transparent p-4 backdrop-blur-sm transition-all hover:border-[rgb(182,255,62)]/30 hover:shadow-lg hover:shadow-[rgb(182,255,62)]/10">
+              <div className="absolute inset-0 bg-gradient-to-br from-[rgb(182,255,62)]/5 to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="relative">
+                <div className="mb-2 flex items-center gap-2">
+                  <div className="rounded-lg bg-[rgb(182,255,62)]/10 p-2">
+                    <Activity className="h-4 w-4 text-[rgb(182,255,62)]" />
+                  </div>
+                  <span className="text-xs font-medium text-white/60">
+                    Avg 24h
+                  </span>
+                </div>
+                <div
+                  className={`text-2xl font-bold ${
+                    marketStats.avgChange >= 0
+                      ? "text-green-400"
+                      : "text-red-400"
+                  }`}
+                >
+                  {fmtChange(marketStats.avgChange)}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Search and Filters */}
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:gap-6">
             {/* Search */}
             <div className="relative flex-1">
-              <div className="absolute inset-0 rounded-2xl bg-white/5" />
-              <div className="relative rounded-2xl border border-white/15 bg-black/40">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60 w-4 h-4" />
+              <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-[rgb(182,255,62)]/10 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+              <div className="group relative">
+                <Search className="absolute left-4 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-white/40 transition-colors group-focus-within:text-[rgb(182,255,62)]" />
                 <input
                   type="text"
-                  placeholder="Search by name or symbol"
+                  placeholder="Search tokens by name or symbol..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-9 pr-3 py-2.5 bg-transparent text-white placeholder-white/50 text-sm focus:outline-none"
+                  className="w-full rounded-2xl border border-white/10 bg-white/5 py-3.5 pl-12 pr-4 text-white placeholder-white/40 backdrop-blur-xl transition-all focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/20"
                 />
               </div>
             </div>
 
             {/* Categories */}
-            <div className="flex gap-1.5 overflow-x-auto pb-1 md:pb-0">
+            <div className="flex flex-wrap gap-2 lg:gap-3">
               <button
                 onClick={() => setSelectedCategory("All")}
-                className={`px-3 py-2 rounded-full text-xs font-semibold transition ${
+                className={`group relative overflow-hidden rounded-full px-5 py-2.5 text-sm font-bold transition-all ${
                   selectedCategory === "All"
-                    ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30"
-                    : "text-white/70 hover:text-white hover:bg-white/10"
+                    ? "bg-[rgb(182,255,62)] text-black shadow-lg shadow-[rgb(182,255,62)]/30"
+                    : "border border-white/20 bg-white/5 text-white/70 hover:border-[rgb(182,255,62)]/50 hover:bg-white/10 hover:text-white"
                 }`}
               >
-                All
+                <span className="relative z-10">All Markets</span>
+                {selectedCategory === "All" && (
+                  <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                )}
               </button>
               {categoryOrder.map((c) => (
                 <button
                   key={c}
                   onClick={() => setSelectedCategory(c)}
-                  className={`px-3 py-2 rounded-full text-xs font-semibold transition whitespace-nowrap ${
+                  className={`group relative overflow-hidden rounded-full px-5 py-2.5 text-sm font-bold transition-all whitespace-nowrap ${
                     selectedCategory === c
-                      ? "bg-[rgb(182,255,62)]/20 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/30"
-                      : "text-white/70 hover:text-white hover:bg-white/10"
+                      ? "bg-[rgb(182,255,62)] text-black shadow-lg shadow-[rgb(182,255,62)]/30"
+                      : "border border-white/20 bg-white/5 text-white/70 hover:border-[rgb(182,255,62)]/50 hover:bg-white/10 hover:text-white"
                   }`}
                 >
-                  {c}
+                  <span className="relative z-10">{c}</span>
+                  {selectedCategory === c && (
+                    <div className="absolute inset-0 animate-pulse bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+                  )}
                 </button>
               ))}
             </div>
           </div>
-        </div>
-      </header>
 
-      {/* List */}
-      <main className="container mx-auto px-4 py-6">
+          {pricesLoading && (
+            <div className="mt-4 flex items-center gap-2 text-sm text-[rgb(182,255,62)]">
+              <div className="h-2 w-2 animate-pulse rounded-full bg-[rgb(182,255,62)]" />
+              <span className="font-medium">Updating live prices...</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <main className="container mx-auto px-4 py-8">
         {!displayTokens.length ? (
-          <div className="text-center py-20 text-white/70">
-            No tokens found.
+          <div className="flex flex-col items-center justify-center py-20">
+            <div className="mb-4 rounded-full bg-white/5 p-6">
+              <Search className="h-12 w-12 text-white/40" />
+            </div>
+            <h3 className="mb-2 text-xl font-bold text-white">
+              No tokens found
+            </h3>
+            <p className="text-white/60">
+              Try adjusting your search or filters
+            </p>
           </div>
         ) : (
-          <div className="grid gap-3 sm:gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {displayTokens.map((t) => {
               const mainnetMint = getMintFor(t, MAINNET);
               const p = mainnetMint ? prices[mainnetMint] : undefined;
@@ -305,14 +441,13 @@ export default function TokenCatalog({
               const local = typeof usd === "number" ? usd * fxRate : undefined;
               const change = p?.priceChange24h;
               const changeStr = fmtChange(change);
-              const changeColor =
-                typeof change === "number"
-                  ? change > 0
-                    ? "text-[rgb(182,255,62)]"
-                    : change < 0
-                    ? "text-red-400"
-                    : "text-white/60"
-                  : "text-white/60";
+              const isPositive = typeof change === "number" && change > 0;
+              const isNegative = typeof change === "number" && change < 0;
+              const changeColor = isPositive
+                ? "text-green-400"
+                : isNegative
+                ? "text-red-400"
+                : "text-white/60";
 
               const disabled =
                 !mainnetMint ||
@@ -324,79 +459,94 @@ export default function TokenCatalog({
                 <Link
                   key={`${t.symbol}-${mainnetMint ?? "nomint"}`}
                   href={`/invest/${t.symbol.toLowerCase()}`}
-                  className="group block rounded-2xl border border-white/10 backdrop-blur-xl p-4 transition hover:border-white/20 hover:bg-black/40"
+                  className="group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-br from-white/5 via-white/[0.02] to-transparent p-5 backdrop-blur-xl transition-all duration-300 hover:border-[rgb(182,255,62)]/40 hover:shadow-2xl hover:shadow-[rgb(182,255,62)]/10 hover:-translate-y-1"
                   aria-label={`Open ${t.name} chart`}
                 >
-                  <div className="flex items-start gap-3">
-                    {/* Logo */}
-                    <div className="relative">
-                      <Image
-                        src={
-                          t.logo ||
-                          "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                          "/placeholder.svg"
-                        }
-                        alt={`${t.name} logo`}
-                        width={40}
-                        height={40}
-                        className="h-10 w-10 rounded-xl border border-white/15 bg-white/5 object-contain"
-                      />
-                      {pricesLoading && (
-                        <div className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-[rgb(182,255,62)] animate-pulse" />
+                  {/* Animated gradient overlay on hover */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-[rgb(182,255,62)]/5 via-transparent to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+
+                  {/* Shimmer effect */}
+                  <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/10 to-transparent transition-transform duration-1000 group-hover:translate-x-full" />
+
+                  <div className="relative">
+                    {/* Header with logo and category */}
+                    <div className="mb-4 flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="relative">
+                          <div className="absolute inset-0 rounded-2xl bg-[rgb(182,255,62)]/20 blur-xl opacity-0 transition-opacity group-hover:opacity-100" />
+                          <Image
+                            src={
+                              t.logo ||
+                              "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                              "/placeholder.svg" ||
+                              "/placeholder.svg"
+                            }
+                            alt={`${t.name} logo`}
+                            width={48}
+                            height={48}
+                            className="relative h-12 w-12 rounded-2xl border border-white/20 bg-white/5 object-contain p-1.5 transition-transform group-hover:scale-110"
+                          />
+                          {pricesLoading && (
+                            <div className="absolute -right-1 -top-1 h-3 w-3 animate-pulse rounded-full bg-[rgb(182,255,62)] ring-2 ring-black" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <h3 className="truncate text-base font-bold text-white group-hover:text-[rgb(182,255,62)] transition-colors">
+                            {t.name}
+                          </h3>
+                          <p className="text-xs font-medium text-white/50">
+                            {t.symbol}
+                          </p>
+                        </div>
+                      </div>
+                      {t.category && (
+                        <span className="rounded-lg bg-[rgb(182,255,62)]/10 px-2.5 py-1 text-xs font-bold text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/20">
+                          {t.category}
+                        </span>
                       )}
                     </div>
 
-                    {/* Content */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className="truncate text-white font-semibold">
-                          {t.name}
+                    {/* Price section */}
+                    <div className="mb-4 space-y-2">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-bold text-white">
+                          {fmtMoney(local)}
                         </span>
-                        <span className="text-xs px-2 py-0.5 rounded-md bg-white/10 text-white/70 border border-white/10">
-                          {t.symbol}
-                        </span>
-                        {t.category && (
-                          <span className="text-xs px-2 py-0.5 rounded-md bg-[rgb(182,255,62)]/10 text-[rgb(182,255,62)] border border-[rgb(182,255,62)]/20">
-                            {t.category}
-                          </span>
-                        )}
                       </div>
-
-                      <div className="mt-2 flex items-end justify-between gap-2">
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-white text-lg font-bold">
-                            {fmtMoney(local)}
-                          </span>
-                          {changeStr && (
-                            <span
-                              className={`text-xs font-semibold ${changeColor}`}
-                            >
-                              {typeof change === "number" && change > 0 && "↗ "}
-                              {typeof change === "number" && change < 0 && "↘ "}
-                              {changeStr}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Buy button (stops link navigation) */}
-                        <button
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            openBuy(t);
-                          }}
-                          disabled={disabled}
-                          className="relative overflow-hidden rounded-xl px-3 py-2 text-xs font-bold border transition
-                                     bg-white/10 border-white/20 text-[rgb(182,255,62)]
-                                     hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40
-                                     disabled:opacity-50 disabled:cursor-not-allowed"
-                          aria-label={`Buy ${t.symbol}`}
+                      {changeStr && (
+                        <div
+                          className={`flex items-center gap-1.5 text-sm font-bold ${changeColor}`}
                         >
-                          <span className="absolute inset-0 -translate-x-full group-hover:translate-x-0 transition-transform duration-700 bg-gradient-to-r from-transparent via-white/15 to-transparent" />
-                          <span className="relative z-10">Buy</span>
-                        </button>
-                      </div>
+                          {isPositive && <TrendingUp className="h-4 w-4" />}
+                          {isNegative && <TrendingDown className="h-4 w-4" />}
+                          <span>{changeStr}</span>
+                          <span className="text-xs font-normal text-white/40">
+                            24h
+                          </span>
+                        </div>
+                      )}
                     </div>
+
+                    {/* Divider */}
+                    <div className="mb-4 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+                    {/* Action button */}
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        openBuy(t);
+                      }}
+                      disabled={disabled}
+                      className="group/btn relative w-full overflow-hidden rounded-xl border border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/10 py-3 font-bold text-[rgb(182,255,62)] transition-all hover:border-[rgb(182,255,62)]/60 hover:bg-[rgb(182,255,62)]/20 hover:shadow-lg hover:shadow-[rgb(182,255,62)]/20 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-[rgb(182,255,62)]/10"
+                      aria-label={`Buy ${t.symbol}`}
+                    >
+                      <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent transition-transform duration-500 group-hover/btn:translate-x-full" />
+                      <span className="relative z-10 flex items-center justify-center gap-2">
+                        <DollarSign className="h-4 w-4" />
+                        Buy {t.symbol}
+                      </span>
+                    </button>
                   </div>
                 </Link>
               );
@@ -405,11 +555,23 @@ export default function TokenCatalog({
         )}
 
         {pricesError && (
-          <div className="mt-6 rounded-2xl border border-red-500/30 bg-red-500/10 p-4 text-red-300">
-            <div className="font-semibold">We couldn’t load live prices.</div>
-            <div className="text-sm opacity-90 mt-1">{pricesError}</div>
-            <div className="text-xs opacity-70 mt-2">
-              Tip: check your connection or try again in a few seconds.
+          <div className="mt-8 overflow-hidden rounded-2xl border border-red-500/30 bg-gradient-to-br from-red-500/10 to-transparent p-6 backdrop-blur-xl">
+            <div className="flex items-start gap-4">
+              <div className="rounded-full bg-red-500/20 p-3">
+                <Activity className="h-6 w-6 text-red-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="mb-2 text-lg font-bold text-red-300">
+                  Price Feed Unavailable
+                </h3>
+                <p className="mb-3 text-sm text-red-200/80">{pricesError}</p>
+                <button
+                  onClick={() => fetchPrices(priceIds)}
+                  className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/20"
+                >
+                  Retry Connection
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -477,7 +639,6 @@ function BuyModal({
   const [qLoading, setQLoading] = useState(false);
   const [qError, setQError] = useState<string | null>(null);
 
-  // token decimals (for readable outAmount)
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -497,7 +658,6 @@ function BuyModal({
     };
   }, [outputMint, jupPriceBase]);
 
-  // net USDC-in after the fixed fee (raw base units)
   const computeInAmountRaw = (): number => {
     if (!spendValid) return 0;
     const amountUsdGross =
@@ -506,7 +666,6 @@ function BuyModal({
     return Math.floor(amountUsdNet * 10 ** USDC_DECIMALS);
   };
 
-  // --- robust quote helper (lite GET -> v6 POST fallback) ---
   async function fetchJupQuoteRobust({
     jupQuoteBase,
     inputMint,
@@ -700,58 +859,72 @@ function BuyModal({
       role="dialog"
     >
       <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-2xl"
+        className="absolute inset-0 bg-black/80 backdrop-blur-2xl"
         onClick={onClose}
         aria-hidden
       />
-      <div className="pointer-events-auto w-full max-w-sm sm:max-w-lg rounded-2xl border border-white/20 bg-black/40 backdrop-blur-[40px] p-5 shadow-[0_32px_64px_rgba(0,0,0,0.4)]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Image
-              src={
-                token.logo ||
-                "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                "/placeholder.svg"
-              }
-              alt={`${token.name} logo`}
-              width={44}
-              height={44}
-              className="h-11 w-11 rounded-xl border border-white/20 bg-white/5 object-contain"
-            />
-            <div>
-              <div className="text-white font-bold text-lg">
-                Buy {token.name}
-              </div>
-              <div className="text-white/60 text-xs">{token.symbol}</div>
-            </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="rounded-xl p-2 text-white/70 hover:text-white hover:bg-white/10"
-            aria-label="Close"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
 
-        <div className="mt-5 space-y-5">
-          <div>
-            <label className="block text-sm font-bold text-white mb-2">
-              Spend ({displayCurrency})
+      <div className="pointer-events-auto relative w-full max-w-md overflow-hidden rounded-3xl border border-white/20 bg-gradient-to-br from-black via-black to-[rgb(182,255,62)]/5 shadow-2xl shadow-black/50 backdrop-blur-3xl">
+        {/* Animated gradient border effect */}
+        <div className="absolute inset-0 rounded-3xl bg-gradient-to-br from-[rgb(182,255,62)]/20 via-transparent to-transparent opacity-50" />
+
+        <div className="relative p-6">
+          {/* Header */}
+          <div className="mb-6 flex items-start justify-between">
+            <div className="flex items-center gap-4">
+              <div className="relative">
+                <div className="absolute inset-0 rounded-2xl bg-[rgb(182,255,62)]/30 blur-xl" />
+                <Image
+                  src={
+                    token.logo ||
+                    "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
+                    "/placeholder.svg" ||
+                    "/placeholder.svg"
+                  }
+                  alt={`${token.name} logo`}
+                  width={56}
+                  height={56}
+                  className="relative h-14 w-14 rounded-2xl border border-white/20 bg-white/5 object-contain p-2"
+                />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white">
+                  Buy {token.name}
+                </h2>
+                <p className="text-sm text-white/60">{token.symbol}</p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="rounded-xl p-2 text-white/60 transition-all hover:bg-white/10 hover:text-white"
+              aria-label="Close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Amount Input */}
+          <div className="mb-6">
+            <label className="mb-3 flex items-center justify-between text-sm font-bold text-white">
+              <span>You Pay</span>
+              <span className="text-white/60">{displayCurrency}</span>
             </label>
-            <input
-              type="number"
-              min="0"
-              step="0.01"
-              value={amountStr}
-              onChange={(e) => setAmountStr(e.target.value)}
-              className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-3 text-white placeholder-white/50 focus:outline-none focus:border-[rgb(182,255,62)]/50"
-              placeholder="0.00"
-              inputMode="decimal"
-            />
-            <div className="mt-2 text-xs text-white/60">
-              Processing fee:{" "}
-              <span className="text-white font-semibold">
+            <div className="relative">
+              <div className="absolute inset-0 rounded-2xl bg-gradient-to-r from-[rgb(182,255,62)]/10 to-transparent opacity-0 transition-opacity focus-within:opacity-100" />
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={amountStr}
+                onChange={(e) => setAmountStr(e.target.value)}
+                className="relative w-full rounded-2xl border border-white/20 bg-white/5 px-5 py-4 text-2xl font-bold text-white placeholder-white/40 backdrop-blur-xl transition-all focus:border-[rgb(182,255,62)]/50 focus:bg-white/10 focus:outline-none focus:ring-2 focus:ring-[rgb(182,255,62)]/20"
+                placeholder="0.00"
+                inputMode="decimal"
+              />
+            </div>
+            <div className="mt-3 flex items-center justify-between text-sm">
+              <span className="text-white/60">Processing fee</span>
+              <span className="font-semibold text-white">
                 {new Intl.NumberFormat(undefined, {
                   style: "currency",
                   currency: displayCurrency,
@@ -761,92 +934,150 @@ function BuyModal({
             </div>
           </div>
 
-          <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+          {/* Quote Display */}
+          <div className="mb-6 overflow-hidden rounded-2xl border border-white/10 bg-gradient-to-br from-white/5 to-transparent backdrop-blur-xl">
             {!spendValid ? (
-              <div className="text-center text-red-300 text-sm">
-                Enter an amount greater than the fee.
+              <div className="p-6 text-center">
+                <div className="mb-2 inline-flex rounded-full bg-yellow-500/10 p-3">
+                  <Sparkles className="h-6 w-6 text-yellow-400" />
+                </div>
+                <p className="text-sm font-medium text-yellow-200">
+                  Enter an amount greater than the fee
+                </p>
               </div>
             ) : qLoading ? (
-              <div className="text-center text-white/80 text-sm">
-                Getting a live price…
-                <div className="mt-3 h-2 bg-white/10 rounded-full overflow-hidden">
-                  <div className="h-full rounded-full animate-pulse w-1/2 bg-white/60" />
+              <div className="p-6">
+                <div className="mb-3 flex items-center justify-center gap-2 text-white/80">
+                  <div className="h-2 w-2 animate-pulse rounded-full bg-[rgb(182,255,62)]" />
+                  <span className="text-sm font-medium">
+                    Fetching best price...
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                  <div className="h-full w-2/3 animate-pulse rounded-full bg-gradient-to-r from-[rgb(182,255,62)] to-[rgb(182,255,62)]/50" />
                 </div>
               </div>
             ) : qError ? (
-              <div className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3 text-yellow-100 text-sm">
-                <div className="font-semibold">We couldn’t fetch a quote.</div>
-                <div className="opacity-90 mt-1">{qError}</div>
-                <ul className="list-disc ml-5 mt-2 text-xs opacity-80 space-y-1">
-                  <li>Try a larger amount (very small trades can’t route).</li>
-                  <li>
-                    If this is a new or illiquid token, routes may be limited.
-                  </li>
-                </ul>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => setAmountStr((prev) => prev)} // retrigger debounce
-                    className="px-3 py-1.5 rounded-md border border-white/20 bg-white/10 text-white/90 hover:bg-white/15 text-xs"
-                  >
-                    Try again
-                  </button>
+              <div className="p-6">
+                <div className="mb-3 flex items-center gap-3">
+                  <div className="rounded-full bg-yellow-500/10 p-2">
+                    <Activity className="h-5 w-5 text-yellow-400" />
+                  </div>
+                  <div className="flex-1">
+                    <h4 className="font-semibold text-yellow-200">
+                      Quote Unavailable
+                    </h4>
+                    <p className="text-xs text-yellow-200/70">{qError}</p>
+                  </div>
                 </div>
+                <ul className="mb-4 ml-10 list-disc space-y-1 text-xs text-white/60">
+                  <li>Try a larger amount</li>
+                  <li>Check token liquidity</li>
+                </ul>
+                <button
+                  onClick={() => setAmountStr((prev) => prev)}
+                  className="w-full rounded-xl border border-yellow-400/30 bg-yellow-500/10 py-2.5 text-sm font-semibold text-yellow-200 transition-colors hover:bg-yellow-500/20"
+                >
+                  Retry Quote
+                </button>
               </div>
             ) : quote && outAmountUi != null ? (
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-white/70 text-sm">You’ll receive</span>
-                  <span className="text-white font-bold text-lg">
-                    {fmtToken(outAmountUi)} {token.symbol}
+              <div className="p-6">
+                <div className="mb-4 flex items-center justify-between">
+                  <span className="text-sm font-medium text-white/60">
+                    You Receive
                   </span>
+                  <div className="text-right">
+                    <div className="text-2xl font-bold text-[rgb(182,255,62)]">
+                      {fmtToken(outAmountUi)}
+                    </div>
+                    <div className="text-sm text-white/60">{token.symbol}</div>
+                  </div>
                 </div>
                 {quote.priceImpactPct && (
-                  <div className="flex items-center justify-between text-xs text-white/60">
-                    <span>Price impact</span>
-                    <span className="text-white/80">
-                      {(Number(quote.priceImpactPct) * 100).toFixed(2)}%
+                  <div className="flex items-center justify-between rounded-xl bg-white/5 px-4 py-3">
+                    <span className="text-xs font-medium text-white/60">
+                      Price Impact
+                    </span>
+                    <span className="text-xs font-bold text-white">
+                      {(Number(quote.priceImpactPct) * 100).toFixed(3)}%
                     </span>
                   </div>
                 )}
-                <div className="text-center text-xs text-white/50 pt-1">
-                  Live quote
+                <div className="mt-3 flex items-center justify-center gap-2 text-xs text-[rgb(182,255,62)]">
+                  <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-[rgb(182,255,62)]" />
+                  <span className="font-medium">Live quote</span>
                 </div>
               </div>
             ) : (
-              <div className="text-center text-white/60 text-sm">
-                Enter an amount to see a live quote.
+              <div className="p-6 text-center text-sm text-white/60">
+                Enter an amount to see a quote
               </div>
             )}
           </div>
 
+          {/* Error Messages */}
           {swapError && (
-            <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-red-300 text-sm">
-              <div className="font-semibold">Purchase failed.</div>
-              <div className="opacity-90 mt-1">{swapError}</div>
-            </div>
-          )}
-          {signature && (
-            <div className="rounded-xl border border-[rgb(182,255,62)]/30 bg-[rgb(182,255,62)]/10 p-3 text-[rgb(182,255,62)] text-sm">
-              Purchase submitted!
+            <div className="mb-6 overflow-hidden rounded-2xl border border-red-500/30 bg-gradient-to-br from-red-500/10 to-transparent p-4">
+              <div className="flex items-start gap-3">
+                <div className="rounded-full bg-red-500/20 p-2">
+                  <X className="h-5 w-5 text-red-400" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-semibold text-red-300">
+                    Transaction Failed
+                  </h4>
+                  <p className="mt-1 text-sm text-red-200/80">{swapError}</p>
+                </div>
+              </div>
             </div>
           )}
 
-          <div className="flex flex-col sm:flex-row gap-3 justify-end">
+          {signature && (
+            <div className="mb-6 overflow-hidden rounded-2xl border border-[rgb(182,255,62)]/30 bg-gradient-to-br from-[rgb(182,255,62)]/10 to-transparent p-4">
+              <div className="flex items-center gap-3">
+                <div className="rounded-full bg-[rgb(182,255,62)]/20 p-2">
+                  <Sparkles className="h-5 w-5 text-[rgb(182,255,62)]" />
+                </div>
+                <div className="flex-1">
+                  <h4 className="font-semibold text-[rgb(182,255,62)]">
+                    Purchase Submitted!
+                  </h4>
+                  <p className="mt-1 text-xs text-white/60">
+                    Transaction is processing...
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
             <button
               onClick={onClose}
-              className="w-full sm:w-auto rounded-xl border border-white/20 bg-white/5 px-5 py-3 text-white/80 hover:text-white hover:bg-white/10"
+              className="flex-1 rounded-xl border border-white/20 bg-white/5 py-3.5 font-bold text-white/80 transition-all hover:bg-white/10 hover:text-white"
             >
               Cancel
             </button>
             <button
               disabled={!canSwap}
               onClick={onBuy}
-              className="w-full sm:w-auto relative overflow-hidden rounded-xl px-5 py-3 font-bold text-[rgb(182,255,62)]
-                         border border-[rgb(182,255,62)]/40 bg-[rgb(182,255,62)]/20
-                         hover:bg-[rgb(182,255,62)]/30 hover:border-[rgb(182,255,62)]/60
-                         disabled:opacity-50 disabled:cursor-not-allowed"
+              className="group/buy relative flex-1 overflow-hidden rounded-xl border border-[rgb(182,255,62)]/40 bg-[rgb(182,255,62)] py-3.5 font-bold text-black shadow-lg shadow-[rgb(182,255,62)]/30 transition-all hover:shadow-xl hover:shadow-[rgb(182,255,62)]/40 disabled:cursor-not-allowed disabled:opacity-50 disabled:shadow-none"
             >
-              {swapping ? "Processing…" : `Buy ${token.symbol}`}
+              <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent transition-transform duration-500 group-hover/buy:translate-x-full" />
+              <span className="relative z-10 flex items-center justify-center gap-2">
+                {swapping ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <DollarSign className="h-5 w-5" />
+                    Buy {token.symbol}
+                  </>
+                )}
+              </span>
             </button>
           </div>
         </div>

@@ -13,22 +13,11 @@ import {
  
 } from "lucide-react";
 
-/**
- * InvestmentApp (Pro)
- * - Mobile-first, professional layout
- * - Sticky, compact header with segmented tabs
- * - Clear calls-to-action and helpful context
- * - Responsive two-column content on desktop; single column on mobile
- *
- * Notes:
- * - Reuses your existing TokenCatalog and WalletHoldings.
- * - “Discover” is the default landing for new users; “Portfolio” shows holdings.
- * - The right column shows optional “Pro tips” & quick links, stays readable.
- */
+
 
 export default function InvestmentApp() {
   const [activeTab, setActiveTab] = useState<"discover" | "portfolio">(
-    "discover"
+    "portfolio"
   );
 
   return (
@@ -57,22 +46,21 @@ export default function InvestmentApp() {
             {/* Segmented Tabs */}
             <div className="rounded-full bg-white/5 border border-white/10 p-1 flex">
               <TabChip
-                isActive={activeTab === "discover"}
-                onClick={() => setActiveTab("discover")}
-                icon={<ShoppingCart className="h-4 w-4" />}
-                label="Discover"
-              />
-              <TabChip
                 isActive={activeTab === "portfolio"}
                 onClick={() => setActiveTab("portfolio")}
                 icon={<Wallet className="h-4 w-4" />}
                 label="Portfolio"
               />
+              <TabChip
+                isActive={activeTab === "discover"}
+                onClick={() => setActiveTab("discover")}
+                icon={<ShoppingCart className="h-4 w-4" />}
+                label="Discover"
+              />
             </div>
 
             {/* Header Controls (optional) */}
             <div className="hidden sm:flex items-center gap-2 pl-2">
-              
               <Button
                 variant="ghost"
                 className="h-9 rounded-xl border border-white/10 bg-white/5 text-white/80 hover:text-white hover:bg-white/10"
@@ -90,7 +78,6 @@ export default function InvestmentApp() {
 
       {/* Content */}
       <main className="mx-auto w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-
         {activeTab === "discover" ? (
           /* Discover: primary flow is exploring & buying */
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
