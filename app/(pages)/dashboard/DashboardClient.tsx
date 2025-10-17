@@ -44,6 +44,10 @@ const InvestAccount = nextDynamic(
   () => import("@/components/dash/InvestAccount"),
   { ssr: false, loading: () => <CardSkeleton /> }
 );
+const DashActivity = nextDynamic(
+  () => import("@/components/dash/DashActivity"),
+  { ssr: false, loading: () => <DashActivity /> }
+);
 
 export default function DashboardClient() {
   return (
@@ -66,6 +70,7 @@ export default function DashboardClient() {
         <section className="mt-8">
           <Hero />
         </section>
+        <section><DashActivity/></section>
       </div>
     </main>
   );
