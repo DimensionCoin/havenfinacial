@@ -117,7 +117,7 @@ export default function ActivityLite() {
     try {
       const headers = await authHeaders();
       const url = new URL("/api/activity", window.location.origin);
-      url.searchParams.set("limit", "5"); // <- only 5 for the dashboard
+      url.searchParams.set("limit", "5"); // dashboard wants 5
       const r = await fetch(url.toString(), {
         credentials: "include",
         cache: "no-store",
@@ -128,7 +128,8 @@ export default function ActivityLite() {
         throw new Error(text || `HTTP ${r.status}`);
       }
       const j = (await r.json()) as ApiResp;
-      setItems(j.items || []);
+      // Hard-cap to 5 just in case the API ignores the limit
+      setItems(Array.isArray(j.items) ? j.items.slice(0, 5) : []);
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load activity");
     } finally {
@@ -177,13 +178,14 @@ export default function ActivityLite() {
   const goAll = useCallback(() => router.push("/activity"), [router]);
 
   return (
-    <div className="relative group">
+    <div className="relative group w-full">
       {/* Glow ring like DepositAccount */}
       <div className="absolute -inset-1 bg-gradient-to-r from-[rgba(182,255,62,0.2)] via-transparent to-[rgba(182,255,62,0.2)] rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-      <div className="relative vision-window p-4 sm:p-6 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%]">
+      {/* NOTE: force the card to be allowed to grow by overriding overflow */}
+      <div className="relative vision-window p-5 sm:p-6 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] overflow-visible">
         {/* Header */}
-        <div className="mb-4 sm:mb-6 flex items-center justify-between gap-2">
+        <div className="mb-5 sm:mb-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-[rgb(182,255,62)] shadow-[0_0_20px_rgba(182,255,62,0.6)]" />
             <h3 className="text-lg sm:text-xl font-bold tracking-tight">
@@ -199,11 +201,9 @@ export default function ActivityLite() {
           </Link>
         </div>
 
-        {/* FX note */}
-        <div className="text-[11px] sm:text-xs text-white/50 mb-3">
-          {fxLoading && targetCurrency !== "USD"
-            ? "Updating FX…"
-            : `Amounts shown in ${targetCurrency}.`}
+        {/* FX note (kept tiny so it doesn't collapse the card) */}
+        <div className="text-[11px] sm:text-xs text-white/50 mb-2 min-h-[14px]">
+          {fxLoading && targetCurrency !== "USD" ? "Updating FX…" : ""}
         </div>
 
         {/* Body */}
@@ -216,6 +216,7 @@ export default function ActivityLite() {
         ) : items.length === 0 && !loading ? (
           <div className="text-sm text-white/60">No activity yet.</div>
         ) : (
+          // No max-height, no hidden overflow — the card will grow to show all 5
           <ul className="divide-y divide-white/10">
             {loading && items.length === 0 ? (
               <>
@@ -234,7 +235,7 @@ export default function ActivityLite() {
                   ? "text-[rgb(182,255,62)]"
                   : "text-red-400";
               return (
-                <li key={it.signature} className="px-2 sm:px-1 py-3">
+                <li key={it.signature} className="px-1 py-3">
                   <button
                     type="button"
                     onClick={goAll}
@@ -278,7 +279,7 @@ export default function ActivityLite() {
         )}
 
         {/* Footer CTA */}
-        <div className="pt-3 mt-3 border-t border-white/10 flex justify-end">
+        <div className="pt-4 mt-4 border-t border-white/10 flex justify-end">
           <Link
             href="/activity"
             className="text-xs sm:text-sm rounded-lg px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 border border-white/10 transition-all"
@@ -293,7 +294,7 @@ export default function ActivityLite() {
 
 function SkeletonRow() {
   return (
-    <li className="px-2 sm:px-1 py-3">
+    <li className="px-1 py-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="h-3 w-40 bg-white/10 rounded mb-2" />
