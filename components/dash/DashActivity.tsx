@@ -79,6 +79,11 @@ export default function ActivityLite() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // render debug
+  useEffect(() => {
+    console.debug("[ActivityLite][render] items.len =", items.length);
+  });
+
   const authHeaders = useCallback(async (): Promise<HeadersInit> => {
     if (!ready || !authenticated) return {};
     try {
@@ -89,6 +94,10 @@ export default function ActivityLite() {
     }
   }, [ready, authenticated, getAccessToken]);
 
+  useEffect(() => {
+    console.debug("[ActivityLite] auth state", { ready, authenticated });
+  }, [ready, authenticated]);
+
   const loadFx = useCallback(async () => {
     if (targetCurrency === "USD") {
       setRate(1);
@@ -97,51 +106,127 @@ export default function ActivityLite() {
     setFxLoading(true);
     try {
       const headers = await authHeaders();
-      const r = await fetch(
-        `/api/fx?currency=${encodeURIComponent(targetCurrency)}&amount=1`,
-        { credentials: "include", cache: "no-store", headers }
-      );
+      const url = `/api/fx?currency=${encodeURIComponent(
+        targetCurrency
+      )}&amount=1`;
+      console.debug("[ActivityLite][FX] fetching", url);
+      const r = await fetch(url, {
+        credentials: "include",
+        cache: "no-store",
+        headers,
+      });
       const j = await r.json().catch(() => null);
       const fx = r.ok && j?.rate ? Number(j.rate) : 1;
+      console.debug("[ActivityLite][FX] status", r.status, "rate", fx);
       setRate(isFinite(fx) && fx > 0 ? fx : 1);
-    } catch {
+    } catch (e) {
+      console.warn("[ActivityLite][FX] error", e);
       setRate(1);
     } finally {
       setFxLoading(false);
     }
   }, [targetCurrency, authHeaders]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
-    try {
-      const headers = await authHeaders();
-      const url = new URL("/api/activity", window.location.origin);
-      url.searchParams.set("limit", "5"); // dashboard wants 5
-      const r = await fetch(url.toString(), {
-        credentials: "include",
-        cache: "no-store",
-        headers,
-      });
-      if (!r.ok) {
-        const text = await r.text().catch(() => "");
-        throw new Error(text || `HTTP ${r.status}`);
+  /**
+   * Robust: fetch until we have N items (or we run out).
+   * - batchSize controls how many we ask per call (keep it modest)
+   * - stops when we reach N or nextBefore is null
+   */
+  const loadFirstN = useCallback(
+    async (nWanted = 5, batchSize = 10) => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const headers = await authHeaders();
+        const collected: Item[] = [];
+        let cursor: string | null = null;
+        let safety = 0;
+
+        console.groupCollapsed("[ActivityLite][API] fetch first N");
+        console.debug("nWanted", nWanted, "batchSize", batchSize);
+
+        while (collected.length < nWanted && safety < 10) {
+          const url = new URL("/api/activity", window.location.origin);
+          url.searchParams.set("limit", String(batchSize));
+          if (cursor) url.searchParams.set("before", cursor);
+
+          console.debug("GET", url.toString());
+          const r = await fetch(url.toString(), {
+            credentials: "include",
+            cache: "no-store",
+            headers,
+          });
+
+          const raw = await r.text();
+          console.debug("status", r.status, "rawLen", raw.length);
+
+          if (!r.ok) {
+            console.groupEnd();
+            throw new Error(raw || `HTTP ${r.status}`);
+          }
+
+          let j: ApiResp | null = null;
+          try {
+            j = JSON.parse(raw) as ApiResp;
+          } catch (e) {
+            console.error("[ActivityLite][API] JSON parse error", e);
+          }
+
+          const batch = Array.isArray(j?.items) ? j!.items : [];
+          console.debug(
+            "batch items",
+            batch.length,
+            "nextBefore",
+            j?.nextBefore
+          );
+          if (batch.length) {
+            console.table(
+              batch.map((i) => ({
+                signature: i.signature,
+                time: i.blockTime,
+                dir: i.direction,
+                usdc: i.amountUi,
+                kind: i.kind,
+              }))
+            );
+          }
+
+          collected.push(...batch);
+          cursor = j?.nextBefore ?? null;
+
+          if (!cursor || batch.length === 0) break;
+          safety += 1;
+        }
+
+        const top = collected.slice(0, nWanted);
+        console.debug(
+          "collected",
+          collected.length,
+          "returning top",
+          top.length
+        );
+        console.groupEnd();
+
+        setItems(top);
+      } catch (e) {
+        console.error("[ActivityLite][API] loadFirstN error:", e);
+        setErr(e instanceof Error ? e.message : "Failed to load activity");
+      } finally {
+        setLoading(false);
       }
-      const j = (await r.json()) as ApiResp;
-      // Hard-cap to 5 just in case the API ignores the limit
-      setItems(Array.isArray(j.items) ? j.items.slice(0, 5) : []);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to load activity");
-    } finally {
-      setLoading(false);
-    }
-  }, [authHeaders]);
+    },
+    [authHeaders]
+  );
 
   useEffect(() => {
     if (!ready) return;
     void loadFx();
-    void load();
-  }, [ready, loadFx, load]);
+    void loadFirstN(5, 10); // <= ensure we end up with 5
+  }, [ready, loadFx, loadFirstN]);
+
+  useEffect(() => {
+    console.debug("[ActivityLite][effect] items updated:", items.length, items);
+  }, [items]);
 
   const fmtAmt = useCallback(
     (usdcUi: number, sign: "+" | "-") => {
@@ -179,11 +264,11 @@ export default function ActivityLite() {
 
   return (
     <div className="relative group w-full">
-      {/* Glow ring like DepositAccount */}
+      {/* Glow ring */}
       <div className="absolute -inset-1 bg-gradient-to-r from-[rgba(182,255,62,0.2)] via-transparent to-[rgba(182,255,62,0.2)] rounded-3xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-700" />
 
-      {/* NOTE: force the card to be allowed to grow by overriding overflow */}
-      <div className="relative vision-window p-5 sm:p-6 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] overflow-visible">
+      {/* Let the card grow to show all 5 */}
+      <div className="relative vision-window p-5 sm:p-6 rounded-3xl border border-white/20 bg-black/40 backdrop-blur-[40px] backdrop-saturate-[200%] overflow-visible min-h-[360px]">
         {/* Header */}
         <div className="mb-5 sm:mb-6 flex items-center justify-between gap-2">
           <div className="flex items-center gap-3">
@@ -201,7 +286,7 @@ export default function ActivityLite() {
           </Link>
         </div>
 
-        {/* FX note (kept tiny so it doesn't collapse the card) */}
+        {/* FX note */}
         <div className="text-[11px] sm:text-xs text-white/50 mb-2 min-h-[14px]">
           {fxLoading && targetCurrency !== "USD" ? "Updating FX…" : ""}
         </div>
@@ -216,7 +301,6 @@ export default function ActivityLite() {
         ) : items.length === 0 && !loading ? (
           <div className="text-sm text-white/60">No activity yet.</div>
         ) : (
-          // No max-height, no hidden overflow — the card will grow to show all 5
           <ul className="divide-y divide-white/10">
             {loading && items.length === 0 ? (
               <>
