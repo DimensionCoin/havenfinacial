@@ -46,8 +46,9 @@ const InvestAccount = nextDynamic(
 );
 const DashActivity = nextDynamic(
   () => import("@/components/dash/DashActivity"),
-  { ssr: false, loading: () => <DashActivity /> }
+  { ssr: false, loading: () => <CardSkeleton /> } 
 );
+
 
 export default function DashboardClient() {
   return (

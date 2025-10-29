@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { usePrivy } from "@privy-io/react-auth";
 
 /** ---- Country + currency helpers ---- */
@@ -394,7 +393,6 @@ async function postOnboardRefresh(
 /* ----------------------------------------------------------------------- */
 
 export default function OnboardingPage() {
-  const router = useRouter();
   const { ready, authenticated, getAccessToken, user } = usePrivy();
 
   // Required

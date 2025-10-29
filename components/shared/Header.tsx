@@ -14,6 +14,7 @@ const NAV = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "Invest", href: "/invest" },
   { name: "Activity", href: "/activity" },
+  { name: "Trade", href: "/trade" },
   { name: "Cards", href: "/cards" },
 ];
 
