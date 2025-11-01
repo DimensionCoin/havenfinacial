@@ -5,6 +5,7 @@ import Image from "next/image";
 import { TrendingUp, TrendingDown, Info } from "lucide-react";
 import { useBalances } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
+import Blocker from "@/components/shared/Blocker";
 
 /* ======================= Pyth Hermes SSE hook ======================= */
 
@@ -488,6 +489,7 @@ export default function TradePage() {
 
   return (
     <div className="min-h-screen bg-black vision-perspective">
+      <Blocker/>
       {/* subtle glow */}
       <div className="fixed inset-0 pointer-events-none">
         <div className="absolute inset-0 bg-[radial-gradient(40%_30%_at_50%_50%,rgba(182,255,62,0.08),transparent)]" />
