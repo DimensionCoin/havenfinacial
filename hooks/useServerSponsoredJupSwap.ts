@@ -63,6 +63,8 @@ type SwapState = {
   last?: SwapAttemptDebug;
 };
 
+type JsonObject = Record<string, unknown>;
+
 /* --------------------------- utils/debug -------------------------- */
 
 function headersToRecord(h: Headers) {
@@ -99,14 +101,16 @@ async function fetchWithDebug(
   };
 }
 
-type JsonObject = Record<string, unknown>;
-
 function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null;
 }
 
 function readString(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function readStringProp(obj: JsonObject, key: string): string | null {
+  return readString(obj[key]);
 }
 
 function shortLogs(input: unknown, maxLines = 10) {
@@ -180,11 +184,10 @@ function makeAttemptId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function readStringProp(obj: JsonObject, key: string): string | null {
-  return readString(obj[key]);
-}
-
 function extractErrorField(obj: JsonObject): string | null {
+  // If you ever add `userMessage` on the server, prefer it here.
+  if (typeof obj.userMessage === "string") return obj.userMessage;
+
   const raw = obj.error;
   if (raw instanceof Error) return raw.message;
   if (typeof raw === "string") return raw;
@@ -194,6 +197,96 @@ function extractErrorField(obj: JsonObject): string | null {
   }
   return null;
 }
+
+/* ---------------------- human-readable errors --------------------- */
+
+type HumanReadableError = {
+  message: string;
+  tip?: string;
+};
+
+function humanizeServerSwapError(
+  serverJson: JsonObject | null
+): HumanReadableError | null {
+  if (!serverJson) return null;
+
+  const errorField = extractErrorField(serverJson) || "";
+  const reason = typeof serverJson.reason === "string" ? serverJson.reason : "";
+  const logsTail = shortLogs(serverJson) || "";
+
+  const combined = [errorField, reason, logsTail]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+
+  // 1) Transaction expired / blockhash issues
+  if (
+    combined.includes("blockhash not found") ||
+    combined.includes("expired")
+  ) {
+    return {
+      message: "This trade took too long to sign and the transaction expired.",
+      tip: "Please try again and approve the transaction promptly.",
+    };
+  }
+
+  // 2) Insufficient USDC for trade + fee (our /build guard)
+  if (combined.includes("insufficient usdc to cover purchase")) {
+    return {
+      message:
+        "You don't have enough USDC to cover this trade and the $0.25 fee.",
+      tip: "Add more USDC or reduce the trade size and try again.",
+    };
+  }
+
+  // 3) Generic “insufficient funds/balance”
+  if (
+    combined.includes("insufficient funds") ||
+    combined.includes("insufficient balance")
+  ) {
+    return {
+      message: "You don't have enough balance to complete this trade.",
+      tip: "Check your wallet balance or try a smaller amount.",
+    };
+  }
+
+  // 4) DEX route / partner issues (like the InvalidPartner CLMM error you saw)
+  if (combined.includes("invalid partner")) {
+    return {
+      message: "The route we got from the DEX isn't valid right now.",
+      tip: "Try a smaller amount or try again in a few moments.",
+    };
+  }
+
+  // 5) Simulation failure (Jupiter or program log)
+  if (combined.includes("simulation failed")) {
+    return {
+      message: "This route couldn't be executed safely on-chain.",
+      tip: "Try lowering the amount, or wait a bit and try again.",
+    };
+  }
+
+  // 6) Co-sign / Privy issues
+  if (combined.includes("privy") && combined.includes("signtransaction")) {
+    return {
+      message: "We couldn't co-sign this transaction with Haven's wallet.",
+      tip: "Please try again. If it keeps failing, contact support.",
+    };
+  }
+
+  // 7) Signature verification / signer mismatch
+  if (combined.includes("signature verification failure")) {
+    return {
+      message: "The transaction signatures were not valid.",
+      tip: "Refresh the page and try the trade again.",
+    };
+  }
+
+  // Nothing specific recognized
+  return null;
+}
+
+/* -------------------------- error tagging ------------------------- */
 
 type AugmentedError = Error & {
   __retryableSession?: boolean;
@@ -275,14 +368,19 @@ export function useServerSponsoredJupSwap() {
 
       const buildJson = isJsonObject(build.json) ? build.json : {};
       const transaction = readStringProp(buildJson, "transaction");
+
       if (!build.ok || !transaction) {
-        const msg =
+        const nice = humanizeServerSwapError(buildJson);
+        const fallback =
           extractErrorField(buildJson) || `Build failed: HTTP ${build.status}`;
+        const msg = nice?.tip
+          ? `${nice.message} ${nice.tip}`
+          : nice?.message || fallback;
+
         throw markError(new Error(msg), { __server: build.json });
       }
 
       /* 2) USER SIG (client) — sign the VersionedTransaction with the user's embedded wallet */
-      // Find the user's wallet by address
       const userWallet = wallets.find(
         (w) => w.address === payload.fromOwnerBase58
       );
@@ -290,7 +388,6 @@ export function useServerSponsoredJupSwap() {
         throw new Error("Source wallet not available for signing.");
       }
 
-      // Deserialize → sign → serialize
       const unsignedBytes = Buffer.from(transaction, "base64");
       const unsignedTx = VersionedTransaction.deserialize(unsignedBytes);
 
@@ -339,10 +436,11 @@ export function useServerSponsoredJupSwap() {
       }));
       printAttemptToConsole("SEND", attempt);
 
-      // special case: expired user session (if your server uses it)
       const sendJson = isJsonObject(send.json) ? send.json : {};
+
+      // special case: expired user session (if your server uses it)
       if (send.status === 440) {
-        const msg = extractErrorField(sendJson) || "User session expired";
+        const msg = extractErrorField(sendJson) || "User session expired.";
         throw markError(new Error(msg), {
           __retryableSession: true,
           __server: send.json,
@@ -351,27 +449,26 @@ export function useServerSponsoredJupSwap() {
 
       const signature = readStringProp(sendJson, "signature");
       if (!send.ok || !signature) {
-        const parts: string[] = [];
+        const nice = humanizeServerSwapError(sendJson);
+        const fallbackParts: string[] = [];
         const errorField = extractErrorField(sendJson);
-        if (errorField) parts.push(errorField);
+        if (errorField) fallbackParts.push(errorField);
         const tail = shortLogs(sendJson);
-        if (tail) parts.push(tail);
-        if (
-          isJsonObject(sendJson.debug) &&
-          sendJson.debug !== null &&
-          "ixSummary" in sendJson.debug
-        ) {
-          parts.push(
-            "ixSummary: " +
-              JSON.stringify(
-                (sendJson.debug as Record<string, unknown>).ixSummary
-              )
-          );
-        }
-        const msg = parts.length
-          ? parts.join("\n\n")
-          : `Broadcast failed: HTTP ${send.status}\n${send.rawText ?? ""}`;
-        throw markError(new Error(msg), { __server: send.json });
+        if (tail) fallbackParts.push(tail);
+        const fallbackRaw = fallbackParts.join("\n\n") || "";
+
+        const baseMessage =
+          nice?.message || "We couldn't complete this trade. Please try again.";
+        const msg =
+          nice?.tip && nice.tip.length
+            ? `${baseMessage} ${nice.tip}`
+            : baseMessage;
+
+        // Attach server body for devs; user only sees `msg`.
+        throw markError(new Error(msg), {
+          __server: send.json,
+          // you could also attach __rawDetail: fallbackRaw if you want
+        } as AugmentedError);
       }
 
       return signature;
@@ -458,7 +555,7 @@ export function useServerSponsoredJupSwap() {
       } catch (e: unknown) {
         const message = e instanceof Error ? e.message : String(e);
         setState((s) => ({ ...s, loading: false, error: message }));
-        // eslint-disable-next-line no-console
+        // Still log full server payload / debug for you
         console.error(
           "[useServerSponsoredJupSwap] failed:",
           message,

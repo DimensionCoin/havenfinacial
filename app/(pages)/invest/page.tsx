@@ -107,12 +107,12 @@ export default function InvestmentApp() {
         ) : (
           /* Portfolio: holdings first, then context */
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <section className="lg:col-span-2 space-y-6">
+            <section className="lg:col-span-2 space-y-3">
               {/* Your existing holdings component already computes totals, fx, etc. */}
               <WalletHoldings />
 
               {/* Optional: add-on card for clarity */}
-              <div className="rounded-2xl border border-white/10 bg-black/30 backdrop-blur-xl p-4 sm:p-5">
+              <div className="rounded-2xl border border-white/10 bg-black/30 backdrop-blur-xl p-1 sm:p-5">
                 <h3 className="text-white font-semibold mb-2">
                   How your balance updates
                 </h3>

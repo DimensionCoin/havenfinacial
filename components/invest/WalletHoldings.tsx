@@ -49,7 +49,11 @@ const EXCLUDED_MINTS = new Set<string>([
 
 type PriceResp = Record<
   string,
-  { usdPrice: number; decimals?: number; priceChange24h?: number }
+  {
+    usdPrice: number;
+    decimals?: number;
+    priceChange24h?: number;
+  }
 >;
 
 type ViewRow = {
@@ -60,6 +64,10 @@ type ViewRow = {
   rawStr: string; // raw base units as string
   priceUsd: number;
   valueUsd: number;
+  // per-token 24h stats
+  priceChange24h?: number;
+  valueUsd24hAgo?: number;
+  pnl24hUsd?: number;
 };
 
 /* -------------------------------- utils ---------------------------------- */
@@ -78,6 +86,12 @@ function fmtMoneyWithoutCurrency(v: number) {
   } catch {
     return v.toFixed(2);
   }
+}
+
+function fmtSignedWithoutCurrency(v: number) {
+  const sign = v > 0 ? "+" : v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  return `${sign}${fmtMoneyWithoutCurrency(abs)}`;
 }
 
 /** raw (bigint) → exact UI string with `decimals` (no trimming) */
@@ -309,6 +323,22 @@ export default function WalletHoldings({
         const valueUsd = amount * priceUsd;
         if (valueUsd < 0.01) continue;
 
+        let priceChange24h: number | undefined = undefined;
+        let valueUsd24hAgo: number | undefined = undefined;
+        let pnl24hUsd: number | undefined = undefined;
+
+        if (
+          typeof p.priceChange24h === "number" &&
+          Number.isFinite(p.priceChange24h)
+        ) {
+          priceChange24h = p.priceChange24h;
+          const ratio = 1 + priceChange24h / 100;
+          if (ratio !== 0) {
+            valueUsd24hAgo = valueUsd / ratio;
+            pnl24hUsd = valueUsd - valueUsd24hAgo;
+          }
+        }
+
         rowsUsd.push({
           token,
           amount,
@@ -317,6 +347,9 @@ export default function WalletHoldings({
           rawStr: raw.toString(),
           priceUsd,
           valueUsd,
+          priceChange24h,
+          valueUsd24hAgo,
+          pnl24hUsd,
         });
       }
 
@@ -344,21 +377,69 @@ export default function WalletHoldings({
     await refresh();
   };
 
+  // Total today value in local currency
   const totalLocal = useMemo(
     () => rows.reduce((s, r) => s + r.valueUsd, 0) * fxRate,
     [rows, fxRate]
   );
+
   const lastUpdated =
     updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString();
 
+  // Portfolio-level 24h P&L stats
+  const portfolio24h = useMemo(() => {
+    if (!rows.length) {
+      return {
+        todayUsd: 0,
+        yesterdayUsd: 0,
+        pnlUsd: 0,
+        pnlPct: 0,
+      };
+    }
+
+    let todayUsd = 0;
+    let yesterdayUsd = 0;
+
+    for (const r of rows) {
+      todayUsd += r.valueUsd;
+      if (r.valueUsd24hAgo != null && Number.isFinite(r.valueUsd24hAgo)) {
+        yesterdayUsd += r.valueUsd24hAgo;
+      } else {
+        yesterdayUsd += r.valueUsd;
+      }
+    }
+
+    const pnlUsd = todayUsd - yesterdayUsd;
+    const pnlPct = yesterdayUsd > 0 ? (pnlUsd / yesterdayUsd) * 100 : 0;
+
+    return { todayUsd, yesterdayUsd, pnlUsd, pnlPct };
+  }, [rows]);
+
+  const pnlLocal = portfolio24h.pnlUsd * fxRate;
+  const pnlPct = portfolio24h.pnlPct;
+
+  const pnlColor =
+    pnlLocal > 0
+      ? "text-green-400"
+      : pnlLocal < 0
+      ? "text-red-400"
+      : "text-white/60";
+
+  // background tint behind the balance
+  const pnlBgGradient =
+    pnlLocal > 0
+      ? "from-green-500/25 via-green-500/10 to-transparent"
+      : pnlLocal < 0
+      ? "from-red-500/25 via-red-500/10 to-transparent"
+      : "from-white/15 via-white/5 to-transparent";
+
   return (
     <div className={`min-h-screen bg-black/10 vision-perspective ${className}`}>
-      <header className="sticky top-0 z-10  backdrop-blur-[40px]  border-b border-white/10 ">
-        <div className="container mx-auto px-2 py-2">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-xl font-bold text-white">Portfolio</h1>
-            </div>
+      {/* NOT sticky anymore */}
+      <header className="border-b border-white/10">
+        <div className="container mx-auto px-2 py-5">
+          <div className="flex items-center justify-end mb-1">
+            
             <button
               type="button"
               disabled={loading}
@@ -371,11 +452,31 @@ export default function WalletHoldings({
             </button>
           </div>
 
-          <div className="text-center py-">
-            <div className="text-2xl font-bold text-white mb-1">
-              {fmtMoneyWithoutCurrency(totalLocal)} {currency}
+          {/* Total + 24h P&L pill with colored blurred background */}
+          <div className="flex justify-center">
+            <div className="relative inline-flex flex-col items-center rounded-3xl border border-white/10 bg-black/40 px-6 py-4 overflow-hidden backdrop-blur-2xl">
+              {/* tinted background */}
+              <div
+                className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${pnlBgGradient} blur-3xl opacity-70`}
+              />
+              <div className="relative text-2xl font-bold text-white mb-1">
+                {fmtMoneyWithoutCurrency(totalLocal)} {currency}
+              </div>
+
+              {rows.length > 0 && (
+                <div
+                  className={`relative text-sm font-semibold mb-1 ${pnlColor}`}
+                >
+                  {fmtSignedWithoutCurrency(pnlLocal)} {currency} (
+                  {pnlPct > 0 ? "+" : pnlPct < 0 ? "-" : ""}
+                  {Math.abs(pnlPct).toFixed(2)}%) last 24h
+                </div>
+              )}
+
+              <div className="relative text-xs text-white/60">
+                Updated {lastUpdated}
+              </div>
             </div>
-            <div className="text-xs text-white/50">Updated {lastUpdated}</div>
           </div>
         </div>
       </header>
@@ -446,22 +547,28 @@ export default function WalletHoldings({
               const clusterMint = getMintFor(row.token, cluster);
               const valueLocal = row.valueUsd * fxRate;
 
+              const tokenPnlLocal = (row.pnl24hUsd ?? 0) * fxRate || 0;
+              const hasTokenPnl =
+                row.pnl24hUsd != null && Number.isFinite(row.pnl24hUsd);
+              const tokenPnlColor =
+                tokenPnlLocal > 0
+                  ? "text-green-400"
+                  : tokenPnlLocal < 0
+                  ? "text-red-400"
+                  : "text-white/50";
+
               return (
                 <Link
                   key={`${row.token.symbol}-${clusterMint ?? "nomint"}`}
                   href={`/invest/${row.token.symbol.toLowerCase()}`}
                   className="block"
                 >
-                  {" "}
-                  <div
-                    key={`${row.token.symbol}-${clusterMint ?? "nomint"}`}
-                    className="relative group"
-                  >
+                  <div className="relative group">
                     {/* Subtle hover effect */}
                     <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/5 via-transparent to-[rgb(182,255,62)]/5 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500 pointer-events-none" />
 
                     <div className="relative p-4 rounded-2xl border border-white/10 bg-black/20 backdrop-blur-[20px] backdrop-saturate-[150%] hover:bg-black/30 hover:border-white/20 transition-all duration-300">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-4">
                         {/* Left side - Token info */}
                         <div className="flex items-center gap-3 flex-1 min-w-0">
                           <div className="relative flex-shrink-0">
@@ -493,6 +600,14 @@ export default function WalletHoldings({
                               })}{" "}
                               {row.token.symbol}
                             </div>
+                            {hasTokenPnl && (
+                              <div
+                                className={`text-xs font-medium mt-1 ${tokenPnlColor}`}
+                              >
+                                {fmtSignedWithoutCurrency(tokenPnlLocal)}{" "}
+                                {currency} last 24h
+                              </div>
+                            )}
                           </div>
                         </div>
 
@@ -506,7 +621,11 @@ export default function WalletHoldings({
 
                           <button
                             type="button"
-                            onClick={() => openSell(row)}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openSell(row);
+                            }}
                             className="group/btn relative overflow-hidden vision-button flex items-center justify-center gap-2 px-4 sm:px-6 py-2.5 sm:py-3 w-full sm:w-auto disabled:opacity-50 disabled:cursor-not-allowed rounded-lg bg-white/10 border border-white/20 hover:bg-[rgb(182,255,62)]/20 hover:border-[rgb(182,255,62)]/40 hover:text-[rgb(182,255,62)] transition-all duration-300 backdrop-blur-sm transform hover:scale-105 active:scale-95 hover:shadow-[0_8px_32px_rgba(182,255,62,0.2)] font-bold text-[rgb(182,255,62)] text-sm sm:text-base"
                           >
                             Sell
@@ -595,13 +714,11 @@ function SellModal({
   const inputMint = getMintFor(row.token, cluster);
   const decimals = row.decimals;
 
-  // Fill with exact max and force the DOM input to reflect immediately
   const onMax = () => {
     setAmountStr(maxAmountStr);
     if (inputRef.current) inputRef.current.value = maxAmountStr;
   };
 
-  // convert to raw for precise comparison
   const inputRaw = useMemo(
     () => rawFromUiString(amountStr, decimals),
     [amountStr, decimals]
@@ -658,7 +775,6 @@ function SellModal({
     signature,
   ]);
 
-  // Allow only valid decimals while typing (programmatic Max bypasses this)
   const onChangeStrict = (v: string) => {
     if (v === "" || /^\d*(?:\.\d*)?$/.test(v)) setAmountStr(v);
   };
@@ -714,7 +830,6 @@ function SellModal({
             Amount to sell ({row.token.symbol})
           </label>
           <div className="relative group">
-            {/* Decorative glow — must not block clicks */}
             <div className="absolute -inset-1 bg-gradient-to-r from-[rgb(182,255,62)]/20 via-transparent to-[rgb(182,255,62)]/20 rounded-2xl blur-xl opacity-0 group-focus-within:opacity-100 transition-all duration-700 pointer-events-none" />
             <div className="flex gap-2 relative z-10">
               <input

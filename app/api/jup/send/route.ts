@@ -96,7 +96,25 @@ const shapeErr = (e: unknown) => {
   };
 };
 
-function json(status: number, body: Record<string, unknown>) {
+// User-friendly error wrapper
+function jsonError(
+  status: number,
+  body: {
+    code: string;
+    error: string;
+    userMessage: string;
+    tip?: string;
+    traceId?: string;
+    stage?: string;
+    logs?: unknown;
+    debug?: unknown;
+    reason?: unknown;
+    simErr?: unknown;
+    rawRpc?: unknown;
+    throws?: unknown;
+    details?: unknown;
+  }
+) {
   log(status >= 400 ? "error" : "info", body);
   return NextResponse.json(body, { status });
 }
@@ -220,8 +238,10 @@ function toSignedBytes(resp: unknown): Uint8Array {
 /* ───────── route ───────── */
 export async function POST(req: NextRequest) {
   const traceId = Math.random().toString(36).slice(2, 10);
+  const stageRef: { stage: string } = { stage: "init" };
 
   try {
+    stageRef.stage = "parseBody";
     const parsed = (await req.json().catch(() => null)) as {
       transaction?: string;
     } | null;
@@ -229,24 +249,48 @@ export async function POST(req: NextRequest) {
     const transaction = parsed?.transaction;
 
     if (!transaction) {
-      return json(400, { error: "Missing 'transaction' (base64)", traceId });
+      return jsonError(400, {
+        code: "MISSING_TRANSACTION",
+        error: "Missing 'transaction' (base64)",
+        userMessage: "We couldn't send this trade.",
+        tip: "Please try again — if it keeps happening, refresh the page.",
+        traceId,
+        stage: stageRef.stage,
+      });
     }
 
     // Decode
+    stageRef.stage = "decodeTransaction";
     const raw = Buffer.from(transaction, "base64");
     if (raw.length === 0) {
-      return json(400, { error: "Invalid transaction encoding", traceId });
+      return jsonError(400, {
+        code: "INVALID_TRANSACTION_ENCODING",
+        error: "Invalid transaction encoding (empty payload)",
+        userMessage: "We couldn't send this trade.",
+        tip: "Please try again. If it persists, contact support.",
+        traceId,
+        stage: stageRef.stage,
+      });
     }
 
     // Deserialize user-signed tx
+    stageRef.stage = "deserializeTransaction";
     let userSignedTx: VersionedTransaction;
     try {
       userSignedTx = VersionedTransaction.deserialize(raw);
     } catch {
-      return json(400, { error: "Invalid VersionedTransaction", traceId });
+      return jsonError(400, {
+        code: "INVALID_VERSIONED_TX",
+        error: "Invalid VersionedTransaction",
+        userMessage: "Something went wrong preparing this trade.",
+        tip: "Close and reopen Haven, then try again.",
+        traceId,
+        stage: stageRef.stage,
+      });
     }
 
     // Fee payer must be Haven
+    stageRef.stage = "validateFeePayer";
     const msgShape = userSignedTx.message as unknown as MessageV0Subset;
     const payerRaw = msgShape.staticAccountKeys?.[0];
     const payerPk = (() => {
@@ -262,30 +306,45 @@ export async function POST(req: NextRequest) {
     })();
 
     if (!payerPk || !payerPk.equals(HAVEN_PUBKEY)) {
-      return json(400, {
+      return jsonError(400, {
+        code: "INVALID_FEE_PAYER",
         error: "Invalid fee payer (must be Haven sponsor wallet)",
-        feePayer:
-          payerPk?.toBase58() ??
-          (typeof payerRaw === "string" ? payerRaw : String(payerRaw ?? null)),
+        userMessage: "Something went wrong with our gas sponsor.",
+        tip: "Please try again. If this keeps happening, contact support.",
         traceId,
+        stage: stageRef.stage,
+        details: {
+          feePayer:
+            payerPk?.toBase58() ??
+            (typeof payerRaw === "string"
+              ? payerRaw
+              : String(payerRaw ?? null)),
+        },
       });
     }
 
     // Reject dummy blockhash
+    stageRef.stage = "validateBlockhash";
     const recentBlockhash = msgShape.recentBlockhash;
     if (
       !recentBlockhash ||
       recentBlockhash === "11111111111111111111111111111111"
     ) {
-      return json(400, {
+      return jsonError(400, {
+        code: "DUMMY_BLOCKHASH",
         error: "Transaction has invalid/dummy recentBlockhash",
+        userMessage: "This trade took too long to send.",
+        tip: "Please try again — we’ll rebuild it with a fresh blockhash.",
         traceId,
+        stage: stageRef.stage,
       });
     }
 
+    stageRef.stage = "initConnection";
     const conn = new Connection(SOLANA_RPC, "confirmed");
 
     // Gather pre-cosign debug
+    stageRef.stage = "gatherDebug";
     const { keys: allKeys, alts } = await resolveAllMessageKeys(
       conn,
       userSignedTx
@@ -304,10 +363,11 @@ export async function POST(req: NextRequest) {
       requiredSignatures,
       alts,
       ixSummary,
-      preSignaturesPresent: preSigPresent as boolean[], // e.g., [userHasSig, payerHasSig?] before co-sign
+      preSignaturesPresent: preSigPresent as boolean[],
     };
 
     // Privy co-sign
+    stageRef.stage = "privySign";
     const appPrivy = new PrivyClient(PRIVY_APP_ID, PRIVY_SECRET, {
       walletApi: { authorizationPrivateKey: PRIVY_AUTH_PK },
     });
@@ -319,7 +379,6 @@ export async function POST(req: NextRequest) {
         transaction: userSignedTx, // pass VersionedTransaction
       });
 
-      // Narrow all possible return shapes to Uint8Array without unsafe casts
       coSignedBytes = toSignedBytes(resp);
     } catch (err: unknown) {
       const e = (err ?? {}) as ErrorLike;
@@ -331,43 +390,61 @@ export async function POST(req: NextRequest) {
       const low = details.toLowerCase();
 
       if (low.includes("blockhash not found") || low.includes("expired")) {
-        return json(409, {
-          error: "Blockhash not found",
+        return jsonError(409, {
+          code: "BLOCKHASH_NOT_FOUND",
+          error: "Blockhash not found / expired during co-sign",
+          userMessage: "This trade expired before we could send it.",
+          tip: "Please try again — we’ll rebuild it with a new blockhash.",
           traceId,
+          stage: stageRef.stage,
           debug: baseDebug,
+          details,
         });
       }
       if (low.includes("signature verification failure")) {
-        return json(400, {
+        return jsonError(400, {
+          code: "SIGNATURE_VERIFICATION_FAILED",
           error:
             "Signature verification failure (message mutated or signer order)",
+          userMessage: "We couldn't verify signatures on this trade.",
+          tip: "Please retry the trade. If it keeps failing, contact support.",
           traceId,
+          stage: stageRef.stage,
           debug: baseDebug,
+          details,
         });
       }
 
-      return json(500, {
+      return jsonError(500, {
+        code: "PRIVY_SIGN_FAILED",
         error: "Privy signTransaction failed",
-        details: details || "no details",
+        userMessage: "We couldn't co-sign this trade on our side.",
+        tip: "Please try again. If it continues, contact support.",
         traceId,
+        stage: stageRef.stage,
         debug: baseDebug,
+        details: details || "no details",
       });
     }
 
     // After co-sign, verify both signatures are present (no all-zero slots)
+    stageRef.stage = "postSignValidation";
     const cosignedTx = VersionedTransaction.deserialize(coSignedBytes);
     const postSigSlots = (cosignedTx as unknown as HasSignatures)
       .signatures as Uint8Array[];
     const postSigPresent = postSigSlots.map((s) => (s ? !anyZero(s) : false));
 
-    // If any required signature slot is empty, fail early with strong debug
     if (
       requiredSignatures > 0 &&
       postSigPresent.slice(0, requiredSignatures).some((v) => !v)
     ) {
-      return json(400, {
+      return jsonError(400, {
+        code: "MISSING_SIGNATURE_AFTER_COSIGN",
         error: "Missing required signature(s) after co-sign",
+        userMessage: "We weren't able to sign this trade correctly.",
+        tip: "Please try again. If it persists, contact support.",
         traceId,
+        stage: stageRef.stage,
         debug: {
           ...baseDebug,
           postSignaturesPresent: postSigPresent,
@@ -379,6 +456,7 @@ export async function POST(req: NextRequest) {
     }
 
     // SIMULATE — two-pass, then raw JSON-RPC fallback to surface logs
+    stageRef.stage = "simulate";
     try {
       const sim1 = await conn.simulateTransaction(cosignedTx, {
         replaceRecentBlockhash: false,
@@ -391,11 +469,15 @@ export async function POST(req: NextRequest) {
           commitment: "processed",
           sigVerify: false,
         });
-        return json(400, {
+        return jsonError(400, {
+          code: "SIMULATION_FAILED",
           error: "Simulation failed",
+          userMessage: "This trade would fail on-chain, so we didn’t send it.",
+          tip: "Try a smaller amount or slightly different route and try again.",
+          traceId,
+          stage: stageRef.stage,
           simErr: sim2.value.err ?? sim1.value.err,
           logs: sim2.value.logs ?? sim1.value.logs ?? [],
-          traceId,
           debug: {
             ...baseDebug,
             postSignaturesPresent: postSigPresent,
@@ -403,18 +485,21 @@ export async function POST(req: NextRequest) {
         });
       }
     } catch (e1: unknown) {
-      // Try again with sigVerify:false to at least get program logs
       try {
         const sim2 = await conn.simulateTransaction(cosignedTx, {
           replaceRecentBlockhash: false,
           commitment: "processed",
           sigVerify: false,
         });
-        return json(400, {
+        return jsonError(400, {
+          code: "SIMULATION_FAILED",
           error: "Simulation failed",
+          userMessage: "This trade would fail on-chain, so we didn’t send it.",
+          tip: "Try adjusting the amount or token and try again.",
+          traceId,
+          stage: stageRef.stage,
           simErr: sim2.value.err ?? shapeErr(e1),
           logs: sim2.value.logs ?? [],
-          traceId,
           debug: {
             ...baseDebug,
             postSignaturesPresent: postSigPresent,
@@ -423,7 +508,7 @@ export async function POST(req: NextRequest) {
       } catch (e2: unknown) {
         // Raw RPC fallback (private client)
         try {
-          const raw = await (conn as unknown as RpcClientShim)._rpcRequest(
+          const rawRpc = await (conn as unknown as RpcClientShim)._rpcRequest(
             "simulateTransaction",
             [
               Buffer.from(cosignedTx.serialize()).toString("base64"),
@@ -435,10 +520,15 @@ export async function POST(req: NextRequest) {
               },
             ]
           );
-          return json(400, {
+          return jsonError(400, {
+            code: "SIMULATION_THROWN",
             error: "Simulation threw",
-            rawRpc: raw as Record<string, unknown>,
+            userMessage:
+              "We couldn’t safely simulate this trade, so we didn’t send it.",
+            tip: "Try again in a few seconds. If it keeps failing, contact support.",
             traceId,
+            stage: stageRef.stage,
+            rawRpc: rawRpc as Record<string, unknown>,
             debug: {
               ...baseDebug,
               postSignaturesPresent: postSigPresent,
@@ -446,9 +536,14 @@ export async function POST(req: NextRequest) {
             },
           });
         } catch (e3: unknown) {
-          return json(400, {
+          return jsonError(400, {
+            code: "SIMULATION_THROWN_FALLBACK",
             error: "Simulation threw (raw fallback also threw)",
+            userMessage:
+              "We couldn’t safely simulate this trade, so we didn’t send it.",
+            tip: "Try again in a bit. If it persists, contact support.",
             traceId,
+            stage: stageRef.stage,
             debug: {
               ...baseDebug,
               postSignaturesPresent: postSigPresent,
@@ -464,6 +559,7 @@ export async function POST(req: NextRequest) {
     }
 
     // SEND
+    stageRef.stage = "send";
     let signature: string;
     try {
       signature = await conn.sendRawTransaction(coSignedBytes, {
@@ -471,32 +567,39 @@ export async function POST(req: NextRequest) {
         maxRetries: 3,
       });
     } catch (err: unknown) {
-      // get simulation logs if possible
       const asSendErr = err as SendTransactionError;
       if (typeof asSendErr?.getLogs === "function") {
         const logs = (await asSendErr.getLogs(conn).catch(() => null)) ?? [];
-        return json(400, {
+        return jsonError(400, {
+          code: "SEND_FAILED_WITH_LOGS",
           error: "Send failed",
+          userMessage: "The trade failed when sending to the network.",
+          tip: "Please try again. If it keeps failing, wait a bit and retry.",
+          traceId,
+          stage: stageRef.stage,
           reason:
             (typeof (err as ErrorLike)?.message === "string" &&
               (err as ErrorLike).message) ||
             "Simulation failed. See logs for details.",
           logs,
-          traceId,
           debug: {
             ...baseDebug,
             postSignaturesPresent: postSigPresent,
           },
         });
       }
-      return json(400, {
+      return jsonError(400, {
+        code: "SEND_FAILED",
         error: "Send failed",
+        userMessage: "We couldn’t broadcast this trade.",
+        tip: "Try again in a few seconds. If it persists, contact support.",
+        traceId,
+        stage: stageRef.stage,
         reason:
           (typeof (err as ErrorLike)?.message === "string" &&
             (err as ErrorLike).message) ||
           "unknown",
         logs: [],
-        traceId,
         debug: {
           ...baseDebug,
           postSignaturesPresent: postSigPresent,
@@ -505,17 +608,27 @@ export async function POST(req: NextRequest) {
     }
 
     // Best-effort confirm
+    stageRef.stage = "confirm";
     try {
       const bh = await conn.getLatestBlockhash("confirmed");
       await conn.confirmTransaction({ signature, ...bh }, "confirmed");
     } catch {
-      // ignore
+      // ignore confirmation failures – tx is still broadcast
     }
 
     const ok = { signature, traceId };
     log("sent", ok);
     return NextResponse.json(ok);
   } catch (e: unknown) {
-    return json(500, { error: shapeErr(e), traceId });
+    const shaped = shapeErr(e);
+    return jsonError(500, {
+      code: "UNHANDLED_SEND_ERROR",
+      error: shaped.message,
+      userMessage: "Something went wrong sending this trade.",
+      tip: "Please try again. If it keeps happening, contact support.",
+      traceId,
+      stage: stageRef.stage,
+      details: shaped,
+    });
   }
 }

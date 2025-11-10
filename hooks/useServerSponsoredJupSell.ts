@@ -16,6 +16,8 @@ if (typeof window !== "undefined") {
   window.Buffer = window.Buffer || Buffer;
 }
 
+const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
+
 type SellInput = {
   fromOwnerBase58: string; // user token authority
   inputMint: string; // token to sell
@@ -28,7 +30,7 @@ type SellInput = {
 type State = {
   loading: boolean;
   signature: string | null;
-  error: string | null;
+  error: string | null; // already user-friendly, ready for UI
 };
 
 type JsonObject = Record<string, unknown>;
@@ -75,6 +77,45 @@ function errorMessage(err: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * Given a JSON error payload from the server, return a nicely formatted
+ * user-facing string we can show directly in the UI.
+ */
+function formatServerError(obj: JsonObject, httpStatus: number): string {
+  const userMessage = readStringProp(obj, "userMessage");
+  const tip = readStringProp(obj, "tip");
+  const code = readStringProp(obj, "code");
+  const traceId = readStringProp(obj, "traceId");
+  const rawError = extractErrorField(obj);
+
+  const parts: string[] = [];
+
+  if (userMessage) {
+    parts.push(userMessage);
+  } else if (rawError) {
+    parts.push(rawError);
+  } else {
+    parts.push(`Sell failed (HTTP ${httpStatus}).`);
+  }
+
+  if (tip) {
+    parts.push(`Tip: ${tip}`);
+  }
+
+  // Append a lightweight hint for support/debugging
+  const meta: string[] = [];
+  if (code) meta.push(`code=${code}`);
+  if (traceId) meta.push(`traceId=${traceId}`);
+
+  if (meta.length) {
+    parts.push(
+      `If this keeps happening, contact support and share: ${meta.join(" · ")}`
+    );
+  }
+
+  return parts.join("\n\n");
+}
+
 export function useServerSponsoredJupSell() {
   const [{ loading, signature, error }, set] = useState<State>({
     loading: false,
@@ -84,6 +125,7 @@ export function useServerSponsoredJupSell() {
 
   const { wallets } = useSolanaWallets();
   const inflight = useRef<AbortController | null>(null);
+
   const cleanup = () => {
     inflight.current?.abort();
     inflight.current = null;
@@ -102,6 +144,19 @@ export function useServerSponsoredJupSell() {
       set({ loading: true, signature: null, error: null });
 
       try {
+        if (!RPC?.includes("mainnet")) {
+          throw new Error("RPC must be a MAINNET endpoint.");
+        }
+        if (!fromOwnerBase58) {
+          throw new Error("Missing owner address.");
+        }
+        if (!inputMint) {
+          throw new Error("Missing token to sell.");
+        }
+        if (!Number.isFinite(amountUi) || amountUi <= 0) {
+          throw new Error("Sell amount must be greater than zero.");
+        }
+
         // find the user’s embedded wallet that matches the owner
         const userWallet = wallets.find((w) => w.address === fromOwnerBase58);
         if (!userWallet) throw new Error("Source wallet not available.");
@@ -113,6 +168,8 @@ export function useServerSponsoredJupSell() {
           ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
         };
 
+        const amountUnits = Math.floor(amountUi * 10 ** inputDecimals);
+
         const buildRes = await fetch("/api/jup/build-sell", {
           method: "POST",
           credentials: "include",
@@ -122,20 +179,28 @@ export function useServerSponsoredJupSell() {
           body: JSON.stringify({
             fromOwnerBase58,
             inputMint,
-            // convert UI -> base units for server build
-            amountUnits: Math.floor(amountUi * 10 ** inputDecimals),
+            amountUnits,
             slippageBps,
           }),
         });
 
         const buildJsonRaw = await buildRes.json().catch(() => ({}));
         const buildJson = isJsonObject(buildJsonRaw) ? buildJsonRaw : {};
-        const transaction = readStringProp(buildJson, "transaction");
-        if (!buildRes.ok || !transaction) {
-          const msg =
-            extractErrorField(buildJson) ||
-            `Build failed: HTTP ${buildRes.status}`;
+
+        if (!buildRes.ok) {
+          // Let server-drive UX: userMessage + tip + traceId
+          const msg = formatServerError(buildJson, buildRes.status);
+          // Helpful console log for devs
+          console.error("[useServerSponsoredJupSell] build error", {
+            status: buildRes.status,
+            body: buildJson,
+          });
           throw new Error(msg);
+        }
+
+        const transaction = readStringProp(buildJson, "transaction");
+        if (!transaction) {
+          throw new Error("Build failed: missing transaction payload.");
         }
 
         // 2) USER SIG — deserialize, user signs, re-serialize
@@ -158,31 +223,56 @@ export function useServerSponsoredJupSell() {
 
         const sendJsonRaw = await sendRes.json().catch(() => ({}));
         const sendJson = isJsonObject(sendJsonRaw) ? sendJsonRaw : {};
-        const signature = readStringProp(sendJson, "signature");
-        if (!sendRes.ok || !signature) {
+        const sig = readStringProp(sendJson, "signature");
+
+        if (!sendRes.ok || !sig) {
+          // send route doesn’t have userMessage/tip yet; we synthesize a decent message
           const parts: string[] = [];
+
           const errField = extractErrorField(sendJson);
           if (errField) parts.push(errField);
+
           const logs = logsTail(sendJson);
-          if (logs) parts.push(logs);
-          const msg =
-            parts.join("\n\n") || `Broadcast failed: HTTP ${sendRes.status}`;
+          if (logs) {
+            parts.push(`Program logs (last lines):\n${logs}`);
+          }
+
+          if (!parts.length) {
+            parts.push(
+              `Broadcast failed (HTTP ${sendRes.status}). Try again in a moment.`
+            );
+          }
+
+          // include traceId if present for support
+          const traceId = readStringProp(sendJson, "traceId");
+          if (traceId) {
+            parts.push(
+              `If this keeps happening, share this code with support: ${traceId}`
+            );
+          }
+
+          const msg = parts.join("\n\n");
+          console.error("[useServerSponsoredJupSell] send error", {
+            status: sendRes.status,
+            body: sendJson,
+          });
           throw new Error(msg);
         }
 
         set({
           loading: false,
-          signature,
+          signature: sig,
           error: null,
         });
-        return signature;
+        return sig;
       } catch (e: unknown) {
-        const message = errorMessage(e, "Sell failed");
+        const message = errorMessage(e, "Sell failed.");
         set({
           loading: false,
           signature: null,
           error: message,
         });
+        console.error("[useServerSponsoredJupSell] failed:", message, e);
         throw e;
       } finally {
         cleanup();

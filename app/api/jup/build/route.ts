@@ -38,6 +38,23 @@ const USDC_DECIMALS = 6;
 const FIXED_FEE_UI = 0.25; // $0.25
 
 /* ───────── utils ───────── */
+
+function jsonError(
+  status: number,
+  payload: {
+    code: string;
+    error: string;
+    userMessage: string;
+    tip?: string;
+    stage?: string;
+    details?: unknown;
+  }
+) {
+  // Server logs for you, but user only sees `userMessage` on the client.
+  console.error("[/api/jup/build] error", status, payload);
+  return NextResponse.json(payload, { status });
+}
+
 async function detectTokenProgramId(conn: Connection, mint: PublicKey) {
   const info = await conn.getAccountInfo(mint, "confirmed");
   if (!info) throw new Error(`Mint not found on chain: ${mint.toBase58()}`);
@@ -82,25 +99,41 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
 
 /* ───────── route ───────── */
 export async function POST(req: Request) {
+  const stageBase = { stage: "init" as string };
+
   try {
-    if (!RPC?.includes("mainnet")) throw new Error("RPC must be mainnet");
-    if (!USDC_MINT || !HAVEN_FEEPAYER_PUBKEY || !TREASURY_OWNER) {
-      throw new Error(
-        "Missing env: USDC_MINT / NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS / NEXT_PUBLIC_APP_TREASURY_OWNER"
-      );
+    if (!RPC?.includes("mainnet")) {
+      return jsonError(500, {
+        code: "NON_MAINNET_RPC",
+        error: "RPC must be mainnet",
+        userMessage: "Something's misconfigured on our side.",
+        tip: "Please try again later while we fix the connection.",
+        ...stageBase,
+      });
     }
 
-    const {
-      fromOwnerBase58,
-      outputMint,
-      amountUnits,
-      slippageBps = 50,
-    } = (await req.json()) as {
-      fromOwnerBase58: string; // user (will sign)
-      outputMint: string; // token to buy
-      amountUnits: number; // net USDC-in (base units), fee is separate
+    if (!USDC_MINT || !HAVEN_FEEPAYER_PUBKEY || !TREASURY_OWNER) {
+      return jsonError(500, {
+        code: "MISSING_ENV",
+        error:
+          "Missing env: USDC_MINT / NEXT_PUBLIC_HAVEN_FEEPAYER_ADDRESS / NEXT_PUBLIC_APP_TREASURY_OWNER",
+        userMessage: "We couldn't set up this trade.",
+        tip: "Please try again in a bit while we sort this out.",
+        ...stageBase,
+      });
+    }
+
+    const body = (await req.json().catch(() => null)) as {
+      fromOwnerBase58?: string;
+      outputMint?: string;
+      amountUnits?: number;
       slippageBps?: number;
-    };
+    } | null;
+
+    const fromOwnerBase58 = body?.fromOwnerBase58 ?? "";
+    const outputMint = body?.outputMint ?? "";
+    const amountUnits = body?.amountUnits ?? 0;
+    const slippageBps = body?.slippageBps ?? 50;
 
     if (
       !fromOwnerBase58 ||
@@ -108,17 +141,27 @@ export async function POST(req: Request) {
       !Number.isFinite(amountUnits) ||
       amountUnits <= 0
     ) {
-      return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+      return jsonError(400, {
+        code: "INVALID_PAYLOAD",
+        error:
+          "Invalid payload (need fromOwnerBase58, outputMint, positive amountUnits)",
+        userMessage: "Something went wrong building this trade.",
+        tip: "Please refresh the page and try again.",
+        ...stageBase,
+      });
     }
 
     const userOwner = new PublicKey(fromOwnerBase58);
     const outMint = new PublicKey(outputMint);
 
     const conn = new Connection(RPC, "confirmed");
+
+    stageBase.stage = "detectTokenProgram";
     const usdcProgramId = await detectTokenProgramId(conn, USDC_MINT);
     const outProgramId = await detectTokenProgramId(conn, outMint);
 
     // ATAs (user + treasury)
+    stageBase.stage = "deriveATAs";
     const userUsdcAta = getAssociatedTokenAddressSync(
       USDC_MINT,
       userOwner,
@@ -139,6 +182,7 @@ export async function POST(req: Request) {
     );
 
     /* ------- guard: user has enough USDC for net + fee ------- */
+    stageBase.stage = "checkBalance";
     const feeUnits = Math.round(FIXED_FEE_UI * 10 ** USDC_DECIMALS);
     const minRequired = amountUnits + feeUnits;
 
@@ -146,14 +190,25 @@ export async function POST(req: Request) {
       .getTokenAccountBalance(userUsdcAta, "confirmed")
       .catch(() => null);
     const available = Number(balResp?.value?.amount || "0");
+
     if (available < minRequired) {
-      return NextResponse.json(
-        { error: "Insufficient USDC to cover purchase + $0.25 fee." },
-        { status: 400 }
-      );
+      return jsonError(400, {
+        code: "INSUFFICIENT_USDC",
+        error: `Insufficient USDC. Required: ${minRequired}, available: ${available}.`,
+        userMessage:
+          "You don't have enough USDC to cover this purchase and the $0.25 fee.",
+        tip: "Add more USDC or try a smaller trade amount.",
+        ...stageBase,
+        details: {
+          required: String(minRequired),
+          available: String(available),
+          feeUnits: String(feeUnits),
+        },
+      });
     }
 
     /* 1) Jupiter quote on the **net** amount */
+    stageBase.stage = "jupQuote";
     const qUrl =
       `${JUP_QUOTE}?` +
       new URLSearchParams({
@@ -164,14 +219,29 @@ export async function POST(req: Request) {
         restrictIntermediateTokens: "true",
         dynamicSlippage: "true",
       });
+
     const qRes = await fetch(qUrl, { cache: "no-store" });
-    if (!qRes.ok)
-      throw new Error(
-        `Jupiter quote failed: ${qRes.status} ${await qRes.text()}`
-      );
-    const quoteResponse = await qRes.json();
+    const qText = await qRes.text().catch(() => "");
+    if (!qRes.ok) {
+      return jsonError(qRes.status, {
+        code: "JUP_QUOTE_FAILED",
+        error: `Jupiter quote failed: ${qRes.status} ${qText}`,
+        userMessage: "We couldn't find a reliable route for this trade.",
+        tip: "Try a smaller amount or a different token and try again.",
+        ...stageBase,
+        details: { body: qText },
+      });
+    }
+
+    let quoteResponse: unknown;
+    try {
+      quoteResponse = qText ? JSON.parse(qText) : {};
+    } catch {
+      quoteResponse = {};
+    }
 
     /* 2) Jupiter swap instructions */
+    stageBase.stage = "jupSwapInstructions";
     const swapIxRes = await fetch(JUP_SWAP_INSTRUCTIONS, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -189,14 +259,20 @@ export async function POST(req: Request) {
         },
       }),
     });
+
+    const swapText = await swapIxRes.text().catch(() => "");
     if (!swapIxRes.ok) {
-      throw new Error(
-        `swap-instructions failed: ${
-          swapIxRes.status
-        } ${await swapIxRes.text()}`
-      );
+      return jsonError(swapIxRes.status, {
+        code: "JUP_SWAP_INSTRUCTIONS_FAILED",
+        error: `swap-instructions failed: ${swapIxRes.status} ${swapText}`,
+        userMessage: "We couldn't prepare this trade.",
+        tip: "Please try again in a few seconds.",
+        ...stageBase,
+        details: { body: swapText },
+      });
     }
-    const j = (await swapIxRes.json()) as Record<string, unknown>;
+
+    const j = (swapText ? JSON.parse(swapText) : {}) as Record<string, unknown>;
 
     // Raw arrays from Jupiter
     const setupIxsRaw = (j.setupInstructions as unknown[]) ?? [];
@@ -205,9 +281,18 @@ export async function POST(req: Request) {
     const altKeys: string[] = Array.isArray(j.addressLookupTableAddresses)
       ? (j.addressLookupTableAddresses as string[])
       : [];
-    if (!swapIxRaw) throw new Error("Jupiter returned no swapInstruction");
+    if (!swapIxRaw) {
+      return jsonError(500, {
+        code: "NO_SWAP_INSTRUCTION",
+        error: "Jupiter returned no swapInstruction",
+        userMessage: "We couldn't prepare this trade route.",
+        tip: "Try again with a slightly different amount.",
+        ...stageBase,
+      });
+    }
 
     /* 3) Load ALTs */
+    stageBase.stage = "loadALTs";
     const altAccounts: AddressLookupTableAccount[] = [];
     for (const k of altKeys) {
       const { value } = await conn.getAddressLookupTable(new PublicKey(k));
@@ -216,6 +301,8 @@ export async function POST(req: Request) {
 
     /* 4) Build instructions
           We sponsor ATAs ourselves with Haven as payer and drop Jupiter's ATA creates for those ATAs. */
+    stageBase.stage = "buildInstructions";
+
     const ourAtas = [
       createAssociatedTokenAccountIdempotentInstruction(
         HAVEN_FEEPAYER_PUBKEY,
@@ -272,6 +359,7 @@ export async function POST(req: Request) {
     ];
 
     /* 5) Fresh blockhash (processed) and compile to v0 with ALTs */
+    stageBase.stage = "compileTransaction";
     const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash(
       "processed"
     );
@@ -293,6 +381,12 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return jsonError(500, {
+      code: "UNHANDLED_BUILD_ERROR",
+      error: msg,
+      userMessage: "We couldn't build this trade.",
+      tip: "Please try again. If it keeps failing, contact support.",
+      stage: stageBase.stage,
+    });
   }
 }
