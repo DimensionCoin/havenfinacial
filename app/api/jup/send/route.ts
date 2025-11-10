@@ -423,7 +423,6 @@ export async function POST(req: NextRequest) {
       } catch (e2: unknown) {
         // Raw RPC fallback (private client)
         try {
-   
           const raw = await (conn as unknown as RpcClientShim)._rpcRequest(
             "simulateTransaction",
             [

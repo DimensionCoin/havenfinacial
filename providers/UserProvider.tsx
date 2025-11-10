@@ -77,6 +77,8 @@ const PUBLIC_ROUTES = new Set<string>([
   "/sign-up",
   "/onboarding",
   "/kyc/pending",
+  "/tos",
+  "/policy"
 ]);
 
 function isPublicPath(pathname: string) {

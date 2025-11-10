@@ -74,7 +74,7 @@ function headersToRecord(h: Headers) {
 async function fetchWithDebug(
   url: string,
   init: RequestInit
-): Promise<(HttpDebug & { res: Response })> {
+): Promise<HttpDebug & { res: Response }> {
   const t0 =
     typeof performance !== "undefined" ? performance.now() : Date.now();
   const res = await fetch(url, init);
@@ -111,7 +111,9 @@ function readString(value: unknown): string | null {
 
 function shortLogs(input: unknown, maxLines = 10) {
   if (!isJsonObject(input) || !Array.isArray(input.logs)) return null;
-  const logs = input.logs.filter((item): item is string => typeof item === "string");
+  const logs = input.logs.filter(
+    (item): item is string => typeof item === "string"
+  );
   if (!logs.length) return null;
   const tail = logs.slice(-maxLines);
   return tail.join("\n");
@@ -340,8 +342,7 @@ export function useServerSponsoredJupSwap() {
       // special case: expired user session (if your server uses it)
       const sendJson = isJsonObject(send.json) ? send.json : {};
       if (send.status === 440) {
-        const msg =
-          extractErrorField(sendJson) || "User session expired";
+        const msg = extractErrorField(sendJson) || "User session expired";
         throw markError(new Error(msg), {
           __retryableSession: true,
           __server: send.json,

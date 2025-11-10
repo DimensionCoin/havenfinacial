@@ -59,7 +59,9 @@ function extractErrorField(obj: JsonObject): string | null {
 function logsTail(obj: JsonObject, lines = 10): string | null {
   const raw = obj.logs;
   if (!Array.isArray(raw)) return null;
-  const logs = raw.filter((entry): entry is string => typeof entry === "string");
+  const logs = raw.filter(
+    (entry): entry is string => typeof entry === "string"
+  );
   return logs.length ? logs.slice(-lines).join("\n") : null;
 }
 
@@ -131,7 +133,8 @@ export function useServerSponsoredJupSell() {
         const transaction = readStringProp(buildJson, "transaction");
         if (!buildRes.ok || !transaction) {
           const msg =
-            extractErrorField(buildJson) || `Build failed: HTTP ${buildRes.status}`;
+            extractErrorField(buildJson) ||
+            `Build failed: HTTP ${buildRes.status}`;
           throw new Error(msg);
         }
 

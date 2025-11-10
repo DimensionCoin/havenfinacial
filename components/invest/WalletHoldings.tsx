@@ -54,10 +54,10 @@ type PriceResp = Record<
 
 type ViewRow = {
   token: TokenMeta;
-  amount: number;            // for math/display
-  amountFullStr: string;     // exact UI units for "Max" (no trimming)
-  decimals: number;          // mint decimals
-  rawStr: string;            // raw base units as string
+  amount: number; // for math/display
+  amountFullStr: string; // exact UI units for "Max" (no trimming)
+  decimals: number; // mint decimals
+  rawStr: string; // raw base units as string
   priceUsd: number;
   valueUsd: number;
 };
@@ -254,7 +254,9 @@ export default function WalletHoldings({
           } else {
             const d = Math.max(prev.decimals, decimals);
             const scalePrev =
-              prev.decimals === d ? BigInt(1) : TEN ** BigInt(d - prev.decimals);
+              prev.decimals === d
+                ? BigInt(1)
+                : TEN ** BigInt(d - prev.decimals);
             const scaleNew =
               decimals === d ? BigInt(1) : TEN ** BigInt(d - decimals);
             accTotals.set(mint, {
