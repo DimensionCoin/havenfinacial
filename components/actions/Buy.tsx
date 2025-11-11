@@ -243,7 +243,7 @@ export default function Buy() {
                 Haven is not a bank and does not custody your assets. See our{" "}
                 <a
                   className="text-[rgb(182,255,62)] underline decoration-dotted underline-offset-2"
-                  href="/legal/terms"
+                  href="/tos"
                   target="_blank"
                   rel="noreferrer"
                 >
@@ -252,7 +252,7 @@ export default function Buy() {
                 and{" "}
                 <a
                   className="text-[rgb(182,255,62)] underline decoration-dotted underline-offset-2"
-                  href="/legal/privacy"
+                  href="/policy"
                   target="_blank"
                   rel="noreferrer"
                 >
