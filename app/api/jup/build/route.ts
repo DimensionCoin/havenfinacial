@@ -35,7 +35,27 @@ const JUP_SWAP_INSTRUCTIONS =
 
 // constants
 const USDC_DECIMALS = 6;
-const FIXED_FEE_UI = 0.25; // $0.25
+const USDC_UNIT = 10 ** USDC_DECIMALS;
+
+// Tiered Haven fee model:
+//  - 1% for notional < $1,000
+//  - 0.5% for notional >= $1,000
+//
+// IMPORTANT: this route receives **net** USDC in `amountUnits`.
+// For a given fee rate r, if:
+//   net = gross * (1 - r)
+//   fee = gross * r = net * r / (1 - r)
+//
+// For r = 1%   → r/(1-r) = 1/99
+// For r = 0.5% → r/(1-r) = 1/199
+//
+// We approximate the tier boundary in terms of **net** by using:
+//   gross >= $1,000  ⇒ net >= $1,000 * (1 - 0.5%) = $995
+// so if net >= $995 we treat it as 0.5% tier.
+const FEE_TIER_1_RATE = 0.01; // 1%
+const FEE_TIER_2_RATE = 0.005; // 0.5%
+const FEE_TIER_NET_USD_CUTOFF = 995; // approximate net cutoff
+const FEE_TIER_NET_UNITS_CUTOFF = FEE_TIER_NET_USD_CUTOFF * USDC_UNIT;
 
 /* ───────── utils ───────── */
 
@@ -97,9 +117,33 @@ const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
   "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 );
 
+/**
+ * Given the **net** USDC amount in base units that we send into Jupiter,
+ * compute the Haven fee units and which fee rate we used.
+ *
+ * - If net < ~$995 → this corresponds to gross < $1,000 → 1% tier
+ * - If net ≥ ~$995 → gross ≥ $1,000 → 0.5% tier
+ */
+function computeTieredFeeUnitsForNet(netUnits: number) {
+  if (!Number.isFinite(netUnits) || netUnits <= 0) {
+    return { feeUnits: 0, rate: 0 };
+  }
+
+  const useLowFeeTier = netUnits >= FEE_TIER_NET_UNITS_CUTOFF; // 0.5% tier
+  const divisor = useLowFeeTier ? 199 : 99; // r/(1-r)
+  const feeUnits = Math.round(netUnits / divisor);
+  const rate = useLowFeeTier ? FEE_TIER_2_RATE : FEE_TIER_1_RATE;
+
+  return { feeUnits, rate };
+}
+
 /* ───────── route ───────── */
 export async function POST(req: Request) {
   const stageBase = { stage: "init" as string };
+
+  // populated after we compute the fee from `amountUnits`
+  let feeUnits = 0;
+  let feeRate = 0;
 
   try {
     if (!RPC?.includes("mainnet")) {
@@ -126,7 +170,7 @@ export async function POST(req: Request) {
     const body = (await req.json().catch(() => null)) as {
       fromOwnerBase58?: string;
       outputMint?: string;
-      amountUnits?: number;
+      amountUnits?: number; // **net** amount going into Jupiter
       slippageBps?: number;
     } | null;
 
@@ -183,8 +227,13 @@ export async function POST(req: Request) {
 
     /* ------- guard: user has enough USDC for net + fee ------- */
     stageBase.stage = "checkBalance";
-    const feeUnits = Math.round(FIXED_FEE_UI * 10 ** USDC_DECIMALS);
-    const minRequired = amountUnits + feeUnits;
+
+    const netUnits = amountUnits;
+    const feeInfo = computeTieredFeeUnitsForNet(netUnits);
+    feeUnits = feeInfo.feeUnits;
+    feeRate = feeInfo.rate;
+
+    const minRequired = netUnits + feeUnits;
 
     const balResp = await conn
       .getTokenAccountBalance(userUsdcAta, "confirmed")
@@ -194,15 +243,16 @@ export async function POST(req: Request) {
     if (available < minRequired) {
       return jsonError(400, {
         code: "INSUFFICIENT_USDC",
-        error: `Insufficient USDC. Required: ${minRequired}, available: ${available}.`,
+        error: `Insufficient USDC to cover purchase and fee. Required: ${minRequired}, available: ${available}.`,
         userMessage:
-          "You don't have enough USDC to cover this purchase and the $0.25 fee.",
+          "You don't have enough USDC to cover this purchase and the Haven fee.",
         tip: "Add more USDC or try a smaller trade amount.",
         ...stageBase,
         details: {
           required: String(minRequired),
           available: String(available),
           feeUnits: String(feeUnits),
+          feeRate,
         },
       });
     }
@@ -214,7 +264,7 @@ export async function POST(req: Request) {
       new URLSearchParams({
         inputMint: USDC_MINT.toBase58(),
         outputMint: outMint.toBase58(),
-        amount: String(amountUnits),
+        amount: String(netUnits),
         slippageBps: String(slippageBps),
         restrictIntermediateTokens: "true",
         dynamicSlippage: "true",
@@ -344,17 +394,21 @@ export async function POST(req: Request) {
       ...ourAtas, // sponsor ATAs (payer = Haven)
       ...filteredSetup, // keep Jupiter compute/prio, etc., minus their ATA creates
       toIx(swapIxRaw), // Jupiter swap
-      createTransferCheckedInstruction(
-        // $0.25 fee AFTER the swap (authority = user, so user must sign)
-        userUsdcAta,
-        USDC_MINT,
-        treasuryUsdcAta,
-        userOwner,
-        Math.round(FIXED_FEE_UI * 10 ** USDC_DECIMALS),
-        USDC_DECIMALS,
-        [],
-        usdcProgramId
-      ),
+      // Haven fee AFTER the swap (authority = user, so user must sign)
+      ...(feeUnits > 0
+        ? [
+            createTransferCheckedInstruction(
+              userUsdcAta,
+              USDC_MINT,
+              treasuryUsdcAta,
+              userOwner,
+              feeUnits,
+              USDC_DECIMALS,
+              [],
+              usdcProgramId
+            ),
+          ]
+        : []),
       ...cleanupIxsRaw.map(toIx),
     ];
 
@@ -378,6 +432,9 @@ export async function POST(req: Request) {
       transaction: b64,
       recentBlockhash: blockhash,
       lastValidBlockHeight,
+      // optional: echo fee info for client-side display if you want it later
+      // feeUnits,
+      // feeRate,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

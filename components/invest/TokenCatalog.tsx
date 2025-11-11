@@ -10,7 +10,6 @@ import {
   TrendingDown,
   Activity,
   DollarSign,
-  BarChart3,
   Sparkles,
 } from "lucide-react";
 import {
@@ -24,6 +23,7 @@ import { usePrivy } from "@privy-io/react-auth";
 import { useSolanaWallets } from "@privy-io/react-auth/solana";
 import { useServerSponsoredJupSwap } from "@/hooks/useServerSponsoredJupSwap";
 import { toast } from "react-hot-toast";
+import { useBalances } from "@/providers/BalanceProvider";
 
 /* ------------------------------- config ---------------------------------- */
 
@@ -49,14 +49,11 @@ const JUP_QUOTE_BASE =
   process.env.NEXT_PUBLIC_JUP_QUOTE_BASE ||
   "https://lite-api.jup.ag/swap/v1/quote";
 
-// USDC mainnet (for preview math only; server enforces everything)
+// Base mint for preview math only; server enforces everything
 const USDC_MAINNET =
   process.env.NEXT_PUBLIC_USDC_MAINNET_MINT ||
   "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDC_DECIMALS = 6;
-
-// Flat service fee (USD) — UI only; server also collects this in the tx
-const FLAT_FEE_USD = 0.25;
 
 /* -------------------------------- types ---------------------------------- */
 
@@ -94,6 +91,7 @@ export default function TokenCatalog({
   const { user } = useUser();
   const { getAccessToken, ready: privyReady, authenticated } = usePrivy();
   const { wallets } = useSolanaWallets();
+  const { deposit } = useBalances(); // from BalanceProvider
 
   const displayCurrency = (user?.displayCurrency || "USD").toUpperCase();
 
@@ -180,7 +178,7 @@ export default function TokenCatalog({
     return () => clearInterval(id);
   }, [priceIds, pollMs, fetchPrices]);
 
-  /* ------------------------------ USD → display FX ------------------------- */
+  /* ------------------------------ FX: base → display ----------------------- */
 
   const [fxRate, setFxRate] = useState<number>(1);
   useEffect(() => {
@@ -289,7 +287,7 @@ export default function TokenCatalog({
               <div className="relative">
                 <div className="mb-2 flex items-center gap-2">
                   <div className="rounded-lg bg-[rgb(182,255,62)]/10 p-2">
-                    <BarChart3 className="h-4 w-4 text-[rgb(182,255,62)]" />
+                    <Activity className="h-4 w-4 text-[rgb(182,255,62)]" />
                   </div>
                   <span className="text-xs font-medium text-white/60">
                     Markets
@@ -478,7 +476,6 @@ export default function TokenCatalog({
                             src={
                               t.logo ||
                               "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                              "/placeholder.svg" ||
                               "/placeholder.svg"
                             }
                             alt={`${t.name} logo`}
@@ -586,6 +583,7 @@ export default function TokenCatalog({
           jupQuoteBase={JUP_QUOTE_BASE}
           jupPriceBase={JUP_PRICE_BASE}
           depositOwnerBase58={depositOwnerBase58}
+          depositAmountUsd={deposit.amountUsd} // base balance from BalanceProvider
           getAccessToken={getAccessToken}
           onClose={closeModal}
           onConfirm={(amountFiat) =>
@@ -606,16 +604,18 @@ function BuyModal({
   jupQuoteBase,
   jupPriceBase,
   depositOwnerBase58,
+  depositAmountUsd,
   getAccessToken,
   onClose,
   onConfirm,
 }: {
   token: TokenMeta;
   displayCurrency: string;
-  fxRate: number; // USD→display
+  fxRate: number; // base → display
   jupQuoteBase: string;
   jupPriceBase: string;
   depositOwnerBase58: string;
+  depositAmountUsd: number; // base balance from BalanceProvider
   getAccessToken: () => Promise<string | null>;
   onClose: () => void;
   onConfirm: (amountFiat: number) => void;
@@ -629,15 +629,45 @@ function BuyModal({
 
   const [amountStr, setAmountStr] = useState<string>("50");
   const amountDisplay = Number(amountStr);
-  const spendValid =
-    Number.isFinite(amountDisplay) &&
-    amountDisplay > FLAT_FEE_USD * (displayCurrency === "USD" ? 1 : fxRate);
 
   const outputMint = getMintFor(token, MAINNET) || ""; // mainnet mint only
   const [outDecimals, setOutDecimals] = useState<number | null>(null);
   const [quote, setQuote] = useState<JupQuote>(null);
   const [qLoading, setQLoading] = useState(false);
   const [qError, setQError] = useState<string | null>(null);
+
+  // derived: deposit balance in user display currency
+  const depositLocal = depositAmountUsd * (fxRate || 1);
+
+  const shortAddress =
+    depositOwnerBase58 && depositOwnerBase58.length > 8
+      ? `${depositOwnerBase58.slice(0, 4)}…${depositOwnerBase58.slice(-4)}`
+      : depositOwnerBase58 || "—";
+
+  // ---- Fee model: same tiered logic as SellModal ----
+  // Work in base currency (pegged to 1 unit of deposit balance ≈ 1 USD)
+  const amountBaseGross =
+    Number.isFinite(amountDisplay) && amountDisplay > 0
+      ? displayCurrency === "USD"
+        ? amountDisplay
+        : amountDisplay / (fxRate || 1)
+      : 0;
+
+  // 1% for trades under 1000 base, 0.5% for >= 1000 (same as sell)
+  const feeRate =
+    amountBaseGross > 0 ? (amountBaseGross < 1000 ? 0.01 : 0.005) : 0;
+
+  const feeBase = amountBaseGross * feeRate;
+  const amountBaseNet = Math.max(0, amountBaseGross - feeBase);
+
+  const feeInDisplay = feeBase * (displayCurrency === "USD" ? 1 : fxRate || 1);
+
+  const netAfterFeeDisplay =
+    amountBaseNet * (displayCurrency === "USD" ? 1 : fxRate || 1);
+
+  const spendValid = amountBaseNet > 0;
+
+  const feePct = feeRate * 100;
 
   useEffect(() => {
     let cancelled = false;
@@ -660,10 +690,9 @@ function BuyModal({
 
   const computeInAmountRaw = (): number => {
     if (!spendValid) return 0;
-    const amountUsdGross =
-      displayCurrency === "USD" ? amountDisplay : amountDisplay / fxRate;
-    const amountUsdNet = Math.max(0, amountUsdGross - FLAT_FEE_USD);
-    return Math.floor(amountUsdNet * 10 ** USDC_DECIMALS);
+    if (!Number.isFinite(amountBaseNet) || amountBaseNet <= 0) return 0;
+    // amountBaseNet is in base units (~1 = 1 deposit unit), map to USDC base units
+    return Math.floor(amountBaseNet * 10 ** USDC_DECIMALS);
   };
 
   async function fetchJupQuoteRobust({
@@ -677,7 +706,7 @@ function BuyModal({
     outputMint: string;
     inAmount: number; // raw (base units)
   }) {
-    // Skip tiny values (< 1 USDC cent) which usually fail to route
+    // Skip tiny values (< 1 cent) which usually fail to route
     if (!inAmount || inAmount < 10_000) {
       throw new Error("Amount too small for a route. Try a larger amount.");
     }
@@ -695,7 +724,6 @@ function BuyModal({
         cache: "no-store",
       });
       if (!res.ok) {
-        // extract message if present
         let message = `Lite quote ${res.status}`;
         try {
           const body = await res.json();
@@ -746,7 +774,7 @@ function BuyModal({
     throw new Error("Jupiter v6 quote: empty response");
   }
 
-  // Quote USDC -> token for the preview panel (debounced, robust)
+  // Quote base-token -> target token for the preview panel (debounced, robust)
   useEffect(() => {
     if (!outputMint) return;
     let cancelled = false;
@@ -792,9 +820,6 @@ function BuyModal({
       ? Number(quote.outAmount) / 10 ** (outDecimals || 6)
       : null;
 
-  const feeInDisplay =
-    displayCurrency === "USD" ? FLAT_FEE_USD : FLAT_FEE_USD * fxRate;
-
   const fmtToken = (v?: number | null) =>
     v == null || !Number.isFinite(v)
       ? "—"
@@ -822,7 +847,7 @@ function BuyModal({
         fromOwnerBase58: depositOwnerBase58,
         outputMint,
         amountDisplay, // user-entered in display currency
-        fxRate, // display → USD
+        fxRate, // display → base
         accessToken,
       });
 
@@ -852,6 +877,13 @@ function BuyModal({
     signature,
   ]);
 
+  const formatDisplayMoney = (v: number) =>
+    new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: displayCurrency,
+      maximumFractionDigits: 2,
+    }).format(v);
+
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4"
@@ -870,7 +902,7 @@ function BuyModal({
 
         <div className="relative p-6">
           {/* Header */}
-          <div className="mb-6 flex items-start justify-between">
+          <div className="mb-4 flex items-start justify-between">
             <div className="flex items-center gap-4">
               <div className="relative">
                 <div className="absolute inset-0 rounded-2xl bg-[rgb(182,255,62)]/30 blur-xl" />
@@ -878,7 +910,6 @@ function BuyModal({
                   src={
                     token.logo ||
                     "https://raw.githubusercontent.com/solana-labs/token-list/main/src/tokens/default.png" ||
-                    "/placeholder.svg" ||
                     "/placeholder.svg"
                   }
                   alt={`${token.name} logo`}
@@ -903,6 +934,28 @@ function BuyModal({
             </button>
           </div>
 
+          {/* Deposit wallet + balance */}
+          <div className="mb-6 flex items-start justify-between gap-3 rounded-2xl border border-white/15 bg-white/5 p-3 text-xs text-white/70">
+            <div>
+              <div className="mb-1 text-[0.72rem] font-semibold uppercase tracking-wide text-white/50">
+                Deposit wallet
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-mono text-[0.76rem] text-white/80">
+                  {shortAddress}
+                </span>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="mb-1 text-[0.72rem] font-semibold uppercase tracking-wide text-white/50">
+                Available to spend
+              </div>
+              <div className="text-xs font-semibold text-white">
+                {formatDisplayMoney(depositLocal)}
+              </div>
+            </div>
+          </div>
+
           {/* Amount Input */}
           <div className="mb-6">
             <label className="mb-3 flex items-center justify-between text-sm font-bold text-white">
@@ -922,15 +975,26 @@ function BuyModal({
                 inputMode="decimal"
               />
             </div>
-            <div className="mt-3 flex items-center justify-between text-sm">
-              <span className="text-white/60">Processing fee</span>
-              <span className="font-semibold text-white">
-                {new Intl.NumberFormat(undefined, {
-                  style: "currency",
-                  currency: displayCurrency,
-                  maximumFractionDigits: 2,
-                }).format(feeInDisplay)}
-              </span>
+
+            {/* Fee breakdown */}
+            <div className="mt-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-xs text-white/70 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="font-medium text-white/80">
+                  Haven fee (only if purchase succeeds)
+                </span>
+                <span className="font-semibold text-white">
+                  {feeInDisplay > 0 ? formatDisplayMoney(feeInDisplay) : "—"}
+                  {feePct > 0 ? ` · ${feePct.toFixed(2)}%` : ""}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-[0.7rem]">
+                <span>Net amount routed into {token.symbol}</span>
+                <span className="font-mono text-white/80">
+                  {netAfterFeeDisplay > 0
+                    ? `${formatDisplayMoney(netAfterFeeDisplay)}`
+                    : "—"}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -942,7 +1006,7 @@ function BuyModal({
                   <Sparkles className="h-6 w-6 text-yellow-400" />
                 </div>
                 <p className="text-sm font-medium text-yellow-200">
-                  Enter an amount greater than the fee
+                  Enter an amount large enough to cover the Haven fee.
                 </p>
               </div>
             ) : qLoading ? (

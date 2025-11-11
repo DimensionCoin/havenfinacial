@@ -103,7 +103,7 @@ function uiStringFromRaw(raw: bigint, decimals: number): string {
   return `${s.slice(0, split)}.${s.slice(split)}`;
 }
 
-/** UI string → raw bigint for precise compare (no ES2020 bigint literals used) */
+/** UI string → raw bigint for precise compare */
 function rawFromUiString(value: string, decimals: number): bigint {
   const TEN = BigInt(10);
   const ZERO = BigInt(0);
@@ -386,7 +386,7 @@ export default function WalletHoldings({
   const lastUpdated =
     updatedAt == null ? "—" : new Date(updatedAt).toLocaleTimeString();
 
-  // Portfolio-level 24h P&L stats
+  // Portfolio-level 24h P&L stats (USD internal, then converted)
   const portfolio24h = useMemo(() => {
     if (!rows.length) {
       return {
@@ -439,7 +439,6 @@ export default function WalletHoldings({
       <header className="border-b border-white/10">
         <div className="container mx-auto px-2 py-5">
           <div className="flex items-center justify-end mb-1">
-            
             <button
               type="button"
               disabled={loading}
@@ -523,8 +522,8 @@ export default function WalletHoldings({
               No Assets Found
             </div>
             <div className="text-white/60 text-sm max-w-md mx-auto mb-4">
-              No assets above $0.01 found in your wallet. Start investing to see
-              your portfolio here.
+              No assets above a minimal value were found in your wallet. Start
+              investing to see your portfolio here.
             </div>
             <button
               type="button"
@@ -615,7 +614,7 @@ export default function WalletHoldings({
                         <div className="flex items-center gap-3">
                           <div className="text-right">
                             <div className="text-white font-semibold text-base">
-                              ${fmtMoneyWithoutCurrency(valueLocal)}
+                              {fmtMoneyWithoutCurrency(valueLocal)} {currency}
                             </div>
                           </div>
 
@@ -682,6 +681,8 @@ export default function WalletHoldings({
               row={sellRow}
               getAccessToken={getAccessToken}
               maxAmountStr={sellRow.amountFullStr}
+              currency={currency}
+              fxRate={fxRate}
             />
           </div>
         </div>
@@ -698,12 +699,16 @@ function SellModal({
   row,
   getAccessToken,
   maxAmountStr,
+  currency,
+  fxRate,
 }: {
   onClose: () => void;
   owner58: string;
   row: ViewRow;
   getAccessToken: () => Promise<string | null>;
   maxAmountStr: string;
+  currency: string;
+  fxRate: number;
 }) {
   const { sell, loading, signature, error } = useServerSponsoredJupSell();
   const [amountStr, setAmountStr] = useState<string>("");
@@ -733,6 +738,49 @@ function SellModal({
 
   const canSell =
     !!inputMint && inputRaw > BigInt(0) && inputRaw <= maxRaw && !loading;
+
+  // -------- Estimated fee based on your tiered model --------
+  const { estProceedsUsd, estFeeLocal, feeRatePct, estNetLocal } =
+    useMemo(() => {
+      const amountNum = Number.parseFloat(amountStr || "0");
+      if (!Number.isFinite(amountNum) || amountNum <= 0) {
+        return {
+          estProceedsUsd: 0,
+          estFeeLocal: 0,
+          feeRatePct: 0,
+          estNetLocal: 0,
+        };
+      }
+
+      // Approx proceeds in USD (internal)
+      const estProceedsUsd = amountNum * row.priceUsd;
+
+      if (!Number.isFinite(estProceedsUsd) || estProceedsUsd <= 0) {
+        return {
+          estProceedsUsd: 0,
+          estFeeLocal: 0,
+          feeRatePct: 0,
+          estNetLocal: 0,
+        };
+      }
+
+      // Tiered fee:
+      //  - 1% for trades under 1000
+      //  - 0.5% for trades >= 1000
+      const feeRate = estProceedsUsd < 1000 ? 0.01 : 0.005;
+      const estFeeUsd = estProceedsUsd * feeRate;
+      const estNetUsd = estProceedsUsd - estFeeUsd;
+
+      const estFeeLocal = estFeeUsd * (fxRate || 1);
+      const estNetLocal = estNetUsd * (fxRate || 1);
+
+      return {
+        estProceedsUsd,
+        estFeeLocal,
+        feeRatePct: feeRate * 100,
+        estNetLocal,
+      };
+    }, [amountStr, row.priceUsd, fxRate]);
 
   const onConfirm = useCallback(async () => {
     if (!canSell) return;
@@ -856,9 +904,43 @@ function SellModal({
           </div>
         </div>
 
+        {/* Fee + proceeds preview */}
+        {estProceedsUsd > 0 && (
+          <div className="rounded-2xl border border-white/15 bg-white/5 backdrop-blur-sm px-4 py-3 text-xs text-white/70 space-y-1.5">
+            <div className="flex justify-between">
+              <span>Estimated proceeds (before fees)</span>
+              <span>
+                {fmtMoneyWithoutCurrency(estNetLocal + estFeeLocal)} {currency}
+              </span>
+            </div>
+
+            <div className="flex justify-between">
+              <span>
+                Haven fee (estimated ·{" "}
+                {feeRatePct.toFixed(1).replace(/\.0$/, "")}%)
+              </span>
+              <span>
+                {fmtMoneyWithoutCurrency(estFeeLocal)} {currency}
+              </span>
+            </div>
+
+            <div className="flex justify-between font-semibold text-white">
+              <span>Estimated you receive</span>
+              <span>
+                {fmtMoneyWithoutCurrency(estNetLocal)} {currency}
+              </span>
+            </div>
+
+            <div className="pt-1 text-[0.7rem] text-white/40">
+              This is an estimate based on the current price. The exact fee and
+              amount of USDC you receive are finalized when the swap executes.
+            </div>
+          </div>
+        )}
+
         <div className="text-xs text-white/50 font-medium">
-          You&apos;ll receive USDC. A $0.25 USDC fee is charged only if the swap
-          succeeds.
+          You&apos;ll receive USDC. The Haven fee is taken as a small percentage
+          of your USDC proceeds only if the swap succeeds.
         </div>
 
         {error && (

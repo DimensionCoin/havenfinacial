@@ -18,7 +18,7 @@ if (typeof window !== "undefined") {
 }
 
 const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
-const FLAT_FEE_USD = 0.25;
+// Removed FLAT_FEE_USD – fee is now % based on notional
 const USDC_DECIMALS = 6;
 
 /* ----------------------------- types ----------------------------- */
@@ -50,7 +50,7 @@ export type SwapAttemptDebug = {
     outputMint: string;
     amountDisplay: number;
     fxRate: number;
-    netInAmountUnits: number;
+    netInAmountUnits: number; // still: amount we send to Jupiter (notional)
   };
   build?: HttpDebug & { endpoint: "build" };
   send?: HttpDebug & { endpoint: "send" };
@@ -230,11 +230,11 @@ function humanizeServerSwapError(
     };
   }
 
-  // 2) Insufficient USDC for trade + fee (our /build guard)
+  // 2) Insufficient USDC for trade + Haven fee (from /build guard)
   if (combined.includes("insufficient usdc to cover purchase")) {
     return {
       message:
-        "You don't have enough USDC to cover this trade and the $0.25 fee.",
+        "You don't have enough USDC to cover this trade and the Haven fee.",
       tip: "Add more USDC or reduce the trade size and try again.",
     };
   }
@@ -250,7 +250,7 @@ function humanizeServerSwapError(
     };
   }
 
-  // 4) DEX route / partner issues (like the InvalidPartner CLMM error you saw)
+  // 4) DEX route / partner issues
   if (combined.includes("invalid partner")) {
     return {
       message: "The route we got from the DEX isn't valid right now.",
@@ -351,7 +351,7 @@ export function useServerSponsoredJupSwap() {
         body: JSON.stringify({
           fromOwnerBase58: payload.fromOwnerBase58,
           outputMint: payload.outputMint,
-          amountUnits: payload.inAmountUnits,
+          amountUnits: payload.inAmountUnits, // notional USDC units
           slippageBps: 50,
         }),
         cache: "no-store",
@@ -500,24 +500,29 @@ export function useServerSponsoredJupSwap() {
         if (!outputMint) throw new Error("Missing output mint.");
         if (!fromOwnerBase58) throw new Error("Missing user owner address.");
 
-        // Convert display → USD → minus flat fee → USDC base units
-        const grossUsd =
+        // Convert display currency → USD notional → USDC base units
+        // amountDisplay is "how much do you want to invest"
+        const notionalUsd =
           Number.isFinite(amountDisplay) && amountDisplay > 0
             ? amountDisplay / (fxRate || 1)
             : 0;
-        if (grossUsd <= FLAT_FEE_USD) {
-          throw new Error("Amount must exceed the $0.25 fee.");
+
+        if (notionalUsd <= 0) {
+          throw new Error("Amount must be greater than zero.");
         }
-        const netUsd = grossUsd - FLAT_FEE_USD;
-        const inAmountUnits = Math.floor(netUsd * 10 ** USDC_DECIMALS);
-        if (inAmountUnits <= 0) throw new Error("Net amount too small.");
+
+        const inAmountUnits = Math.floor(notionalUsd * 10 ** USDC_DECIMALS);
+
+        if (!Number.isFinite(inAmountUnits) || inAmountUnits <= 0) {
+          throw new Error("Amount is too small.");
+        }
 
         const inputsForDebug: SwapAttemptDebug["inputs"] = {
           fromOwnerBase58,
           outputMint,
           amountDisplay,
           fxRate,
-          netInAmountUnits: inAmountUnits,
+          netInAmountUnits: inAmountUnits, // amount we send to Jupiter
         };
 
         // first attempt

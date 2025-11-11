@@ -47,8 +47,15 @@ const XSTOCK_MINT = new PublicKey(
 const FORCE_LITE_INPUTS = new Set<string>([XSTOCK_MINT.toBase58()]);
 
 const USDC_DECIMALS = 6;
-const FIXED_FEE_UI = 0.25;
-const FIXED_FEE_UNITS = Math.round(FIXED_FEE_UI * 10 ** USDC_DECIMALS);
+const USDC_UNIT = 10 ** USDC_DECIMALS;
+
+// Tiered Haven fee model on **USDC proceeds**:
+//  - 1% for gross USDC < $1,000
+//  - 0.5% for gross USDC >= $1,000
+const FEE_TIER_1_RATE = 0.01; // 1%
+const FEE_TIER_2_RATE = 0.005; // 0.5%
+const FEE_TIER_GROSS_USD_CUTOFF = 1000;
+const FEE_TIER_GROSS_UNITS_CUTOFF = FEE_TIER_GROSS_USD_CUTOFF * USDC_UNIT;
 
 // Jupiter endpoints
 const LITE_QUOTE = "https://lite-api.jup.ag/swap/v1/quote";
@@ -220,10 +227,31 @@ async function jupSwapIxs(
   return (await res.json()) as Record<string, unknown>;
 }
 
+/**
+ * Given the **gross USDC proceeds** (in base units) from the quote,
+ * compute Haven's fee units and which rate we applied.
+ */
+function computeTieredFeeUnitsFromProceeds(grossUnits: number) {
+  if (!Number.isFinite(grossUnits) || grossUnits <= 0) {
+    return { feeUnits: 0, rate: 0 };
+  }
+
+  const useLowRate = grossUnits >= FEE_TIER_GROSS_UNITS_CUTOFF; // >= $1,000
+  const rate = useLowRate ? FEE_TIER_2_RATE : FEE_TIER_1_RATE;
+  const feeUnits = Math.round(grossUnits * rate);
+
+  return { feeUnits, rate };
+}
+
 /* ───────── route ───────── */
 export async function POST(req: Request) {
   const traceId = Math.random().toString(36).slice(2, 10);
   const stageRef: { stage: string } = { stage: "init" };
+
+  // We'll fill these after the quote so we can optionally return them
+  let feeUnits = 0;
+  let feeRate = 0;
+  let expectedOutUnits = 0;
 
   try {
     stageRef.stage = "envCheck";
@@ -243,7 +271,7 @@ export async function POST(req: Request) {
     } = (await req.json()) as {
       fromOwnerBase58: string;
       inputMint: string;
-      amountUnits: number;
+      amountUnits: number; // input token base units
       slippageBps?: number;
     };
 
@@ -284,7 +312,7 @@ export async function POST(req: Request) {
       usdcProgId
     );
 
-    /* ----- balance guard ----- */
+    /* ----- balance guard on the INPUT token ----- */
     stageRef.stage = "balanceGuard";
     let useNativeSol = false;
 
@@ -402,6 +430,61 @@ export async function POST(req: Request) {
       }
     }
 
+    // 1a) Extract expected USDC proceeds from the quote and compute tiered fee
+    const qrObj = quoteResponse as { outAmount?: unknown };
+    const outAmountStr =
+      typeof qrObj.outAmount === "string"
+        ? qrObj.outAmount
+        : typeof qrObj.outAmount === "number"
+        ? String(qrObj.outAmount)
+        : null;
+
+    if (!outAmountStr) {
+      return jsonError(500, {
+        code: "MISSING_OUT_AMOUNT",
+        error: "Quote missing outAmount",
+        userMessage:
+          "We couldn’t read the expected USDC amount for this sell route.",
+        tip: "Please try again in a moment.",
+        stage: stageRef.stage,
+        traceId,
+      });
+    }
+
+    expectedOutUnits = Number(outAmountStr);
+    if (!Number.isFinite(expectedOutUnits) || expectedOutUnits <= 0) {
+      return jsonError(500, {
+        code: "BAD_OUT_AMOUNT",
+        error: `Quote outAmount invalid: ${outAmountStr}`,
+        userMessage:
+          "We couldn’t read the expected USDC amount for this sell route.",
+        tip: "Please try again with a slightly different amount.",
+        stage: stageRef.stage,
+        traceId,
+      });
+    }
+
+    const feeInfo = computeTieredFeeUnitsFromProceeds(expectedOutUnits);
+    feeUnits = feeInfo.feeUnits;
+    feeRate = feeInfo.rate;
+
+    if (feeUnits > 0 && feeUnits >= expectedOutUnits) {
+      return jsonError(400, {
+        code: "AMOUNT_TOO_SMALL_FOR_FEE",
+        error: `Expected proceeds ${expectedOutUnits} too small vs fee ${feeUnits}`,
+        userMessage:
+          "This sell amount is too small to cover Haven’s fee on the proceeds.",
+        tip: "Try selling a larger amount so the fee is a smaller percentage, or reduce the amount slightly and try again.",
+        stage: stageRef.stage,
+        traceId,
+        details: {
+          expectedOutUnits: String(expectedOutUnits),
+          feeUnits: String(feeUnits),
+          feeRate,
+        },
+      });
+    }
+
     /* 2) SWAP INSTRUCTIONS */
     stageRef.stage = "swapInstructions";
     const swapIxs = await jupSwapIxs(quoteKind, {
@@ -437,7 +520,7 @@ export async function POST(req: Request) {
       if (value) altAccounts.push(value);
     }
 
-    /* 4) Sponsored ATAs (this is where we fix the “insufficient lamports 0” issue) */
+    /* 4) Sponsored ATAs */
     stageRef.stage = "sponsorAtas";
 
     const ourAtas: TransactionInstruction[] = [];
@@ -470,9 +553,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // We will:
-    //  - Replace *all* Jupiter ATA creates with our own that use HAVEN_FEEPAYER as the payer.
-    //  - Remove the original ATA instructions from setup.
+    // Replace *all* Jupiter ATA creates with our own that use HAVEN_FEEPAYER as the payer.
     const skipSet = new Set<string>([
       userUsdcAta.toBase58(),
       ...(needTreasuryAta ? [treasuryUsdcAta.toBase58()] : []),
@@ -513,23 +594,28 @@ export async function POST(req: Request) {
       (ix) => !ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID)
     );
 
-    // Post-swap $0.25 USDC fee (user -> treasury)
-    const feeIx = createTransferCheckedInstruction(
-      userUsdcAta,
-      SWAP_USDC_MINT,
-      treasuryUsdcAta,
-      userOwner,
-      FIXED_FEE_UNITS,
-      USDC_DECIMALS,
-      [],
-      usdcProgId
-    );
+    // Post-swap Haven fee on USDC proceeds (user -> treasury)
+    const feeIx =
+      feeUnits > 0
+        ? createTransferCheckedInstruction(
+            userUsdcAta,
+            SWAP_USDC_MINT,
+            treasuryUsdcAta,
+            userOwner,
+            feeUnits,
+            USDC_DECIMALS,
+            [],
+            usdcProgId
+          )
+        : null;
 
     const ixsCore = [toIx(swapIxRaw)];
     const ixsHead = [...ourAtas, ...setupFiltered];
     const ixsTail = cleanupIxsRaw.map(toIx);
 
-    const ixsWithFee = [...ixsHead, ...ixsCore, feeIx, ...ixsTail];
+    const ixsWithFee = feeIx
+      ? [...ixsHead, ...ixsCore, feeIx, ...ixsTail]
+      : [...ixsHead, ...ixsCore, ...ixsTail];
     const ixsNoFee = [...ixsHead, ...ixsCore, ...ixsTail];
 
     /* 5) Compile & size guard */
@@ -549,13 +635,13 @@ export async function POST(req: Request) {
 
     let tx = compile(ixsWithFee);
     let encodedLen = Buffer.from(tx.serialize()).length;
-    let postChargeFeeCents: number | undefined;
+    let postChargeFeeUnits: number | undefined;
 
     if (encodedLen > MAX_ENCODED_LEN) {
-      // Drop inline fee transfer; we can charge out-of-band
+      // Drop inline fee transfer; you could charge out-of-band using postChargeFeeUnits if you want.
       tx = compile(ixsNoFee);
       encodedLen = Buffer.from(tx.serialize()).length;
-      postChargeFeeCents = 25;
+      postChargeFeeUnits = feeUnits || undefined;
     }
 
     if (encodedLen > MAX_ENCODED_LEN) {
@@ -578,8 +664,21 @@ export async function POST(req: Request) {
       transaction: b64,
       recentBlockhash: blockhash,
       lastValidBlockHeight,
-      ...(postChargeFeeCents ? { postChargeFeeCents } : {}),
       traceId,
+      ...(feeUnits
+        ? {
+            feeUnits,
+            feeRate,
+            expectedOutUnits,
+          }
+        : {}),
+      ...(postChargeFeeUnits
+        ? {
+            postChargeFeeUnits,
+            feeRate,
+            expectedOutUnits,
+          }
+        : {}),
     });
   } catch (e) {
     const shaped = shapeErr(e);
