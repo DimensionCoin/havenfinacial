@@ -15,6 +15,7 @@ import { useBalances } from "@/providers/BalanceProvider";
 import { useUser } from "@/providers/UserProvider";
 import Positions from "@/components/booster/Positions";
 import Trade from "@/components/booster/Trade";
+import { useRouter } from "next/navigation";
 
 /* ======================= Pyth Hermes SSE hook ======================= */
 
@@ -214,6 +215,7 @@ const DISCLAIMER_TTL_MS = 30 * 24 * 60 * 60 * 1000; // ~30 days
 /* ======================= Main Page ======================= */
 
 export default function TradeBoosterPage() {
+  const router = useRouter(); 
   const [selectedCoin, setSelectedCoin] = useState<Coin>("BTC");
   const [side, setSide] = useState<"long" | "short">("long");
 
@@ -377,7 +379,186 @@ export default function TradeBoosterPage() {
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/90 via-black/70 to-transparent" />
 
                     <div className="space-y-5 text-white/80 text-sm md:text-base relative">
-                      {/* ... disclaimer content unchanged ... */}
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          1. What Trade Booster Does
+                        </h3>
+                        <p>
+                          Trade Booster is an optional feature that increases
+                          your exposure to BTC, ETH, or SOL using{" "}
+                          <span className="font-semibold">1.5× leverage</span>.
+                          When you open a boosted position, Haven uses your
+                          deposit as collateral and borrows additional exposure
+                          on your behalf. This magnifies both{" "}
+                          <span className="font-semibold">
+                            potential gains and potential losses
+                          </span>
+                          .
+                        </p>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          2. Risk of Loss &amp; Liquidation
+                        </h3>
+                        <p>
+                          Leveraged trading is{" "}
+                          <span className="font-semibold">high risk</span>. If
+                          the market moves against your position, the value of
+                          your collateral can fall quickly. In certain
+                          scenarios:
+                        </p>
+                        <ul className="list-disc list-inside space-y-1 text-white/75">
+                          <li>
+                            Your entire boosted position can be liquidated.
+                          </li>
+                          <li>
+                            You can lose{" "}
+                            <span className="font-semibold">
+                              100% of the amount you boosted
+                            </span>
+                            .
+                          </li>
+                          <li>
+                            You are not protected from sudden or extreme market
+                            moves, gaps, or volatility.
+                          </li>
+                        </ul>
+                        <p>
+                          You should only use Trade Booster with money you can
+                          afford to lose entirely.
+                        </p>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          3. Not Investment Advice
+                        </h3>
+                        <p>
+                          Haven and Trade Booster do{" "}
+                          <span className="font-semibold">
+                            not provide financial, investment, tax, or legal
+                            advice
+                          </span>
+                          . Any information, charts, prices, or analytics shown
+                          in the app are for{" "}
+                          <span className="font-semibold">
+                            informational and educational purposes only
+                          </span>
+                          .
+                        </p>
+                        <p>
+                          You are solely responsible for all trading decisions
+                          you make when using Trade Booster.
+                        </p>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          4. Third-Party Protocol Risk
+                        </h3>
+                        <p>
+                          Trade Booster routes your positions through
+                          third-party DeFi protocols on Solana (for example,
+                          perpetuals platforms). These protocols come with their
+                          own risks, including but not limited to:
+                        </p>
+                        <ul className="list-disc list-inside space-y-1 text-white/75">
+                          <li>Smart contract vulnerabilities or bugs.</li>
+                          <li>Oracle failures or bad price feeds.</li>
+                          <li>
+                            Liquidity issues, protocol downtime, or
+                            insolvency-style events.
+                          </li>
+                          <li>Chain congestion, de-pegs, or network halts.</li>
+                        </ul>
+                        <p>
+                          Haven does not control these protocols and cannot
+                          guarantee their performance or safety.
+                        </p>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          5. Operational &amp; Technical Risk
+                        </h3>
+                        <p>
+                          Using Trade Booster depends on the proper functioning
+                          of:
+                        </p>
+                        <ul className="list-disc list-inside space-y-1 text-white/75">
+                          <li>The Solana blockchain and network validators.</li>
+                          <li>Wallet infrastructure and key management.</li>
+                          <li>
+                            Haven&apos;s own systems, APIs, and integrations.
+                          </li>
+                        </ul>
+                        <p>
+                          Outages, delays, or errors can prevent you from
+                          opening or closing positions when you expect, which
+                          may increase your losses.
+                        </p>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          6. Your Responsibilities
+                        </h3>
+                        <p>By using Trade Booster, you agree that you:</p>
+                        <ul className="list-disc list-inside space-y-1 text-white/75">
+                          <li>
+                            Understand how leverage, liquidation, and perpetuals
+                            products work.
+                          </li>
+                          <li>
+                            Have considered your own financial situation and
+                            risk tolerance.
+                          </li>
+                          <li>
+                            Are solely responsible for monitoring your open
+                            positions and overall exposure.
+                          </li>
+                          <li>
+                            Will not rely on Haven as a guarantee of returns or
+                            capital preservation.
+                          </li>
+                        </ul>
+                      </section>
+
+                      <section className="space-y-2">
+                        <h3 className="text-base md:text-lg font-semibold text-white">
+                          7. Summary Acknowledgement
+                        </h3>
+                        <p>
+                          By clicking{" "}
+                          <span className="font-semibold">
+                            “I Understand &amp; Accept”
+                          </span>{" "}
+                          below, you confirm that:
+                        </p>
+                        <ul className="list-disc list-inside space-y-1 text-white/75">
+                          <li>
+                            You have read and understood the information above.
+                          </li>
+                          <li>
+                            You understand you can lose the full amount used in
+                            a boosted trade.
+                          </li>
+                          <li>
+                            You are using Trade Booster at your own risk and
+                            discretion.
+                          </li>
+                          <li>
+                            You will review these terms again if they are
+                            updated or resurfaced in the future.
+                          </li>
+                        </ul>
+                        <p className="text-xs text-white/50 mt-2">
+                          This summary is not exhaustive. Additional terms may
+                          apply in Haven&apos;s main Terms of Use and other
+                          legal documents.
+                        </p>
+                      </section>
                     </div>
                   </div>
 
@@ -397,11 +578,15 @@ export default function TradeBoosterPage() {
 
                     <div className="flex gap-3 mt-2 md:mt-0">
                       <button
-                        onClick={() => setShowDisclaimer(false)}
+                        onClick={() => {
+                          setShowDisclaimer(false); // optional, page will unmount anyway on nav
+                          router.push("/dashboard"); // 👈 redirect
+                        }}
                         className="flex-1 py-3 rounded-xl bg-white/5 border border-white/25 hover:bg-white/10 text-white font-semibold transition-all duration-300 backdrop-blur-sm"
                       >
                         Decline
                       </button>
+
                       <button
                         onClick={() => {
                           if (!hasScrolledDisclaimer) return;
