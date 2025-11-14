@@ -5,6 +5,7 @@ import { jwtVerify } from "jose";
 import { connect } from "@/lib/db";
 import User, { type IUser } from "@/models/User";
 import { PrivyClient } from "@privy-io/server-auth";
+import { Connection, PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,11 +14,16 @@ export const dynamic = "force-dynamic";
 const APP_ID = process.env.PRIVY_APP_ID!;
 const SECRET = process.env.PRIVY_SECRET_KEY!;
 const JWT_SECRET = process.env.JWT_SECRET!;
+const RPC = process.env.NEXT_PUBLIC_SOLANA_RPC!;
+
 if (!APP_ID || !SECRET || !JWT_SECRET)
   throw new Error("Missing PRIVY_APP_ID / PRIVY_SECRET_KEY / JWT_SECRET");
 
+if (!RPC) throw new Error("Missing NEXT_PUBLIC_SOLANA_RPC");
+
 const privy = new PrivyClient(APP_ID, SECRET);
 const enc = new TextEncoder();
+const connection = new Connection(RPC, "confirmed");
 
 // ❗ match the cookie you SET in /api/auth/session
 const SESSION_COOKIE = "haven_session";
@@ -78,6 +84,18 @@ export async function GET(req: NextRequest) {
     const hasDepositWallet = !!userDoc.depositWallet?.address;
     const hasMarginfiAccount = !!userDoc.marginfi?.accountPk;
 
+    // 🔹 Fetch native SOL balance for deposit wallet (best-effort)
+    let depositSolBalanceUi: number | null = null;
+    if (hasDepositWallet && userDoc.depositWallet?.address) {
+      try {
+        const pubkey = new PublicKey(userDoc.depositWallet.address);
+        const lamports = await connection.getBalance(pubkey);
+        depositSolBalanceUi = lamports / LAMPORTS_PER_SOL;
+      } catch (err) {
+        console.error("Failed to fetch SOL balance for deposit wallet:", err);
+      }
+    }
+
     const toIso = (v: unknown): string | null =>
       v instanceof Date
         ? v.toISOString()
@@ -112,7 +130,19 @@ export async function GET(req: NextRequest) {
         cards: !!userDoc.features?.cards,
         lend: !!userDoc.features?.lend,
       },
-      depositWallet: userDoc.depositWallet ?? null,
+
+      // 🔹 Attach SOL balance to depositWallet
+      depositWallet: userDoc.depositWallet
+        ? {
+            ...userDoc.depositWallet,
+            solBalanceUi: depositSolBalanceUi, // number | null
+          }
+        : null,
+
+      // 🔹 Also expose a root-level numeric field (0 if null/undefined)
+      depositSolBalanceUi:
+        typeof depositSolBalanceUi === "number" ? depositSolBalanceUi : 0,
+
       tokenAccounts: {
         usdc2022: {
           depositAta: userDoc.tokenAccounts?.usdc2022?.depositAta || null,

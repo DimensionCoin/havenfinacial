@@ -13,8 +13,9 @@ import useStandalone from "@/hooks/useStandalone";
 const NAV = [
   { name: "Dashboard", href: "/dashboard" },
   { name: "Invest", href: "/invest" },
+  { name: "Boost", href: "/trade" },
   { name: "Activity", href: "/activity" },
-  { name: "Trade", href: "/trade" },
+ 
   { name: "Cards", href: "/cards" },
 ];
 

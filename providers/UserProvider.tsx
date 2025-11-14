@@ -17,6 +17,8 @@ type EmbeddedWallet = {
   walletId?: string;
   address?: string;
   chainType: "solana";
+  /** ✅ Native SOL balance in SOL units (from /api/user/me) */
+  solBalanceUi?: number | null;
 } | null;
 
 type PublicUser = {
@@ -45,8 +47,10 @@ type PublicUser = {
     acceptedAt?: string | null;
     version?: string;
   };
-  /** ✅ New: baseline principal in USD/USDC units */
+  /** ✅ baseline principal in USD/USDC units */
   savingsBaselineUi?: number;
+  /** ✅ Native SOL balance from API (root-level helper) */
+  depositSolBalanceUi?: number;
   flags?: {
     hasDepositWallet: boolean;
     hasMarginfiAccount: boolean;
@@ -60,8 +64,10 @@ type Ctx = {
   user: PublicUser | null;
   loading: boolean;
   refresh: () => Promise<void>;
-  /** ✅ New: convenience getter so callers don’t null-check */
+  /** ✅ Convenience getter so callers don’t null-check */
   savingsBaselineUi: number;
+  /** ✅ Convenience getter for native SOL balance on deposit wallet */
+  depositSolBalanceUi: number;
 };
 
 const UserContext = createContext<Ctx>({
@@ -69,6 +75,7 @@ const UserContext = createContext<Ctx>({
   loading: true,
   refresh: async () => {},
   savingsBaselineUi: 0,
+  depositSolBalanceUi: 0,
 });
 
 const PUBLIC_ROUTES = new Set<string>([
@@ -78,7 +85,7 @@ const PUBLIC_ROUTES = new Set<string>([
   "/onboarding",
   "/kyc/pending",
   "/tos",
-  "/policy"
+  "/policy",
 ]);
 
 function isPublicPath(pathname: string) {
@@ -162,9 +169,28 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     [user?.savingsBaselineUi]
   );
 
+  const depositSolBalanceUi = useMemo(() => {
+    // Prefer root-level field from API if present
+    if (typeof user?.depositSolBalanceUi === "number") {
+      return user.depositSolBalanceUi;
+    }
+    // Fallback to nested depositWallet.solBalanceUi
+    const raw =
+      user?.depositWallet && "solBalanceUi" in user.depositWallet
+        ? user.depositWallet.solBalanceUi
+        : null;
+    return typeof raw === "number" ? raw : 0;
+  }, [user?.depositSolBalanceUi, user?.depositWallet]);
+
   const value = useMemo(
-    () => ({ user, loading, refresh, savingsBaselineUi }),
-    [user, loading, refresh, savingsBaselineUi]
+    () => ({
+      user,
+      loading,
+      refresh,
+      savingsBaselineUi,
+      depositSolBalanceUi,
+    }),
+    [user, loading, refresh, savingsBaselineUi, depositSolBalanceUi]
   );
 
   const isPublic = isPublicPath(pathname);

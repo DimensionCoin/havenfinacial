@@ -155,3 +155,11 @@
 html[data-standalone="true"] .pwa-toaster { top: calc(env(safe-area-inset-top, 0px) + 28px) !important; }
 .pwa-top-offset { padding-top: 0; }
 html[data-standalone="true"] .pwa-top-offset { padding-top: calc(env(safe-area-inset-top, 0px) + 20px); }
+
+
+@layer utilities {
+  .text-2xs {
+    font-size: 0.625rem; /* 10px-ish */
+    line-height: 0.875rem;
+  }
+}

@@ -6,6 +6,7 @@ import type React from "react";
 import Header from "@/components/shared/Header";
 import { UserProvider } from "@/providers/UserProvider";
 import { BalanceProvider } from "@/providers/BalanceProvider";
+import Wrapper from "@/components/shared/Wrapper"; // 👈 add this
 
 export default function RootLayout({
   children,
@@ -16,6 +17,9 @@ export default function RootLayout({
     <div className="min-h-screen">
       <UserProvider>
         <BalanceProvider /* autoRefreshMs={30000} optional */>
+          {/* 👇 Wrapper has access to useUser and runs on every page load */}
+          <Wrapper />
+
           <div>
             <Header />
           </div>

